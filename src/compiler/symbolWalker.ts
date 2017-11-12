@@ -8,7 +8,7 @@ namespace ts {
         getTypeOfSymbol: (sym: Symbol) => Type,
         getResolvedSymbol: (node: Node) => Symbol,
         getIndexTypeOfStructuredType: (type: Type, kind: IndexKind) => Type | undefined,
-        getConstraintFromTypeParameter: (typeParameter: TypeParameter) => Type,
+        getConstraintFromTypeParameter: (typeParameter: TypeParameter) => Type | undefined,
         getFirstIdentifier: (node: EntityNameOrEntityNameExpression) => Identifier) {
 
         return getSymbolWalker;
