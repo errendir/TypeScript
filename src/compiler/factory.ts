@@ -3010,7 +3010,7 @@ namespace ts {
         }
     }
 
-    function createJsxFactoryExpression(jsxFactoryEntity: EntityName, reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment): Expression {
+    function createJsxFactoryExpression(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment): Expression {
         return jsxFactoryEntity ?
             createJsxFactoryExpressionFromEntityName(jsxFactoryEntity, parent) :
             createPropertyAccess(
@@ -3019,7 +3019,7 @@ namespace ts {
             );
     }
 
-    export function createExpressionForJsxElement(jsxFactoryEntity: EntityName, reactNamespace: string, tagName: Expression, props: Expression, children: Expression[], parentElement: JsxOpeningLikeElement, location: TextRange): LeftHandSideExpression {
+    export function createExpressionForJsxElement(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, tagName: Expression, props: Expression, children: Expression[], parentElement: JsxOpeningLikeElement, location: TextRange): LeftHandSideExpression {
         const argumentsList = [tagName];
         if (props) {
             argumentsList.push(props);
@@ -3051,7 +3051,7 @@ namespace ts {
         );
     }
 
-    export function createExpressionForJsxFragment(jsxFactoryEntity: EntityName, reactNamespace: string, children: Expression[], parentElement: JsxOpeningFragment, location: TextRange): LeftHandSideExpression {
+    export function createExpressionForJsxFragment(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, children: Expression[], parentElement: JsxOpeningFragment, location: TextRange): LeftHandSideExpression {
         const tagName = createPropertyAccess(
             createReactNamespace(reactNamespace, parentElement),
             "Fragment"
@@ -4364,7 +4364,7 @@ namespace ts {
      *  2. --out or --outFile is used, making the name relative to the rootDir
      * Otherwise, a new StringLiteral node representing the module name will be returned.
      */
-    export function tryGetModuleNameFromFile(file: SourceFile, host: EmitHost, options: CompilerOptions): StringLiteral | undefined {
+    export function tryGetModuleNameFromFile(file: SourceFile | undefined, host: EmitHost, options: CompilerOptions): StringLiteral | undefined {
         if (!file) {
             return undefined;
         }

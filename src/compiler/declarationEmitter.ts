@@ -265,7 +265,7 @@ namespace ts {
             setWriter(oldWriter);
         }
 
-        function recordTypeReferenceDirectivesIfNecessary(typeReferenceDirectives: string[]): void {
+        function recordTypeReferenceDirectivesIfNecessary(typeReferenceDirectives: string[] | undefined): void {
             if (!typeReferenceDirectives) {
                 return;
             }

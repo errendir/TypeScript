@@ -653,8 +653,8 @@ namespace ts {
         return false;
     }
 
-    export function concatenate<T>(array1: T[], array2: T[]): T[];
-    export function concatenate<T>(array1: ReadonlyArray<T>, array2: ReadonlyArray<T>): ReadonlyArray<T>;
+    export function concatenate<T>(array1: T[] | undefined, array2: T[]): T[];
+    export function concatenate<T>(array1: ReadonlyArray<T> | undefined, array2: ReadonlyArray<T>): ReadonlyArray<T>;
     export function concatenate<T>(array1: T[] | undefined, array2: T[] | undefined): T[] | undefined;
     export function concatenate<T>(array1: ReadonlyArray<T> | undefined, array2: ReadonlyArray<T> | undefined): ReadonlyArray<T> | undefined;
     export function concatenate<T>(array1: ReadonlyArray<T> | undefined, array2: ReadonlyArray<T> | undefined): ReadonlyArray<T> | undefined {

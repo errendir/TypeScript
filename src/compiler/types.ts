@@ -2689,7 +2689,7 @@ namespace ts {
          */
         getExportSymbolOfSymbol(symbol: Symbol): Symbol;
         getPropertySymbolOfDestructuringAssignment(location: Identifier): Symbol | undefined;
-        getTypeAtLocation(node: Node): Type;
+        getTypeAtLocation(node: Node): Type | undefined;
         getTypeFromTypeNode(node: TypeNode): Type;
         signatureToString(signature: Signature, enclosingDeclaration?: Node, flags?: TypeFormatFlags, kind?: SignatureKind): string;
         typeToString(type: Type, enclosingDeclaration?: Node, flags?: TypeFormatFlags): string;
@@ -2960,9 +2960,9 @@ namespace ts {
     /* @internal */
     export interface EmitResolver {
         hasGlobalName(name: string): boolean;
-        getReferencedExportContainer(node: Identifier, prefixLocals?: boolean): SourceFile | ModuleDeclaration | EnumDeclaration;
-        getReferencedImportDeclaration(node: Identifier): Declaration;
-        getReferencedDeclarationWithCollidingName(node: Identifier): Declaration;
+        getReferencedExportContainer(node: Identifier, prefixLocals?: boolean): SourceFile | ModuleDeclaration | EnumDeclaration | undefined;
+        getReferencedImportDeclaration(node: Identifier): Declaration | undefined;
+        getReferencedDeclarationWithCollidingName(node: Identifier): Declaration | undefined;
         isDeclarationWithCollidingName(node: Declaration): boolean;
         isValueAliasDeclaration(node: Node): boolean;
         isReferencedAliasDeclaration(node: Node, checkChildren?: boolean): boolean;
@@ -2979,18 +2979,18 @@ namespace ts {
         isSymbolAccessible(symbol: Symbol, enclosingDeclaration: Node | undefined, meaning: SymbolFlags | undefined, shouldComputeAliasToMarkVisible: boolean): SymbolAccessibilityResult;
         isEntityNameVisible(entityName: EntityNameOrEntityNameExpression, enclosingDeclaration: Node | undefined): SymbolVisibilityResult;
         // Returns the constant value this property access resolves to, or 'undefined' for a non-constant
-        getConstantValue(node: EnumMember | PropertyAccessExpression | ElementAccessExpression): string | number;
-        getReferencedValueDeclaration(reference: Identifier): Declaration;
+        getConstantValue(node: EnumMember | PropertyAccessExpression | ElementAccessExpression): string | number | undefined;
+        getReferencedValueDeclaration(reference: Identifier): Declaration | undefined;
         getTypeReferenceSerializationKind(typeName: EntityName, location?: Node): TypeReferenceSerializationKind;
         isOptionalParameter(node: ParameterDeclaration): boolean;
         moduleExportsSomeValue(moduleReferenceExpression: Expression): boolean;
         isArgumentsLocalBinding(node: Identifier): boolean;
-        getExternalModuleFileFromDeclaration(declaration: ImportEqualsDeclaration | ImportDeclaration | ExportDeclaration | ModuleDeclaration): SourceFile;
-        getTypeReferenceDirectivesForEntityName(name: EntityNameOrEntityNameExpression): string[];
-        getTypeReferenceDirectivesForSymbol(symbol: Symbol, meaning?: SymbolFlags): string[];
+        getExternalModuleFileFromDeclaration(declaration: ImportEqualsDeclaration | ImportDeclaration | ExportDeclaration | ModuleDeclaration): SourceFile | undefined;
+        getTypeReferenceDirectivesForEntityName(name: EntityNameOrEntityNameExpression): string[] | undefined;
+        getTypeReferenceDirectivesForSymbol(symbol: Symbol, meaning?: SymbolFlags): string[] | undefined;
         isLiteralConstDeclaration(node: VariableDeclaration | PropertyDeclaration | PropertySignature | ParameterDeclaration): boolean;
         writeLiteralConstValue(node: VariableDeclaration | PropertyDeclaration | PropertySignature | ParameterDeclaration, writer: SymbolWriter): void;
-        getJsxFactoryEntity(): EntityName;
+        getJsxFactoryEntity(): EntityName | undefined;
     }
 
     export const enum SymbolFlags {
