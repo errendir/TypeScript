@@ -2,6 +2,9 @@
 /// <reference path="binder.ts"/>
 /// <reference path="symbolWalker.ts" />
 
+// @ts-ignore
+const perfLog = console.log
+
 /* @internal */
 namespace ts {
     const ambientModuleSymbolRegex = /^".+"$/;
@@ -9379,6 +9382,7 @@ namespace ts {
             // equal and infinitely expanding. Fourth, if we have reached a depth of 100 nested comparisons, assume we have runaway recursion
             // and issue an error. Otherwise, actually compare the structure of the two types.
             function recursiveTypeRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
+                const startTime = Date.now()
                 if (overflow) {
                     return Ternary.False;
                 }
@@ -9437,6 +9441,10 @@ namespace ts {
                     // assumptions it will also be false without assumptions)
                     relation.set(id, reportErrors ? RelationComparisonResult.FailedAndReported : RelationComparisonResult.Failed);
                     maybeCount = maybeStart;
+                }
+                const elapsedTime = Date.now() - startTime
+                if(depth < 3 && compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
+                    perfLog("Long check", elapsedTime, typeToString(source), typeToString(target))
                 }
                 return result;
             }
@@ -9529,37 +9537,98 @@ namespace ts {
                     }
                 }
                 else {
-                    if (getObjectFlags(source) & ObjectFlags.Reference && getObjectFlags(target) & ObjectFlags.Reference && (<TypeReference>source).target === (<TypeReference>target).target &&
+                    if (getObjectFlags(source) & ObjectFlags.Reference && getObjectFlags(target) & ObjectFlags.Reference &&
                         !(source.flags & TypeFlags.MarkerType || target.flags & TypeFlags.MarkerType)) {
-                        // We have type references to the same generic type, and the type references are not marker
-                        // type references (which are intended by be compared structurally). Obtain the variance
-                        // information for the type parameters and relate the type arguments accordingly.
-                        const variances = getVariances((<TypeReference>source).target);
-                        if (result = typeArgumentsRelatedTo(<TypeReference>source, <TypeReference>target, variances, reportErrors)) {
-                            return result;
-                        }
-                        // The type arguments did not relate appropriately, but it may be because we have no variance
-                        // information (in which case typeArgumentsRelatedTo defaulted to covariance for all type
-                        // arguments). It might also be the case that the target type has a 'void' type argument for
-                        // a covariant type parameter that is only used in return positions within the generic type
-                        // (in which case any type argument is permitted on the source side). In those cases we proceed
-                        // with a structural comparison. Otherwise, we know for certain the instantiations aren't
-                        // related and we can return here.
-                        if (variances !== emptyArray && !hasCovariantVoidArgument(<TypeReference>target, variances)) {
-                            // In some cases generic types that are covariant in regular type checking mode become
-                            // invariant in --strictFunctionTypes mode because one or more type parameters are used in
-                            // both co- and contravariant positions. In order to make it easier to diagnose *why* such
-                            // types are invariant, if any of the type parameters are invariant we reset the reported
-                            // errors and instead force a structural comparison (which will include elaborations that
-                            // reveal the reason).
-                            if (!(reportErrors && some(variances, v => v === Variance.Invariant))) {
-                                return Ternary.False;
+                        if((<TypeReference>source).target === (<TypeReference>target).target) {
+                            // We have type references to the same generic type, and the type references are not marker
+                            // type references (which are intended by be compared structurally). Obtain the variance
+                            // information for the type parameters and relate the type arguments accordingly.
+                            const variances = getVariances((<TypeReference>source).target);
+                            if (result = typeArgumentsRelatedTo(<TypeReference>source, <TypeReference>target, variances, reportErrors)) {
+                                return result;
                             }
-                            // We remember the original error information so we can restore it in case the structural
-                            // comparison unexpectedly succeeds. This can happen when the structural comparison result
-                            // is a Ternary.Maybe for example caused by the recursion depth limiter.
-                            originalErrorInfo = errorInfo;
-                            errorInfo = saveErrorInfo;
+                            // The type arguments did not relate appropriately, but it may be because we have no variance
+                            // information (in which case typeArgumentsRelatedTo defaulted to covariance for all type
+                            // arguments). It might also be the case that the target type has a 'void' type argument for
+                            // a covariant type parameter that is only used in return positions within the generic type
+                            // (in which case any type argument is permitted on the source side). In those cases we proceed
+                            // with a structural comparison. Otherwise, we know for certain the instantiations aren't
+                            // related and we can return here.
+                            if (variances !== emptyArray && !hasCovariantVoidArgument(<TypeReference>target, variances)) {
+                                // In some cases generic types that are covariant in regular type checking mode become
+                                // invariant in --strictFunctionTypes mode because one or more type parameters are used in
+                                // both co- and contravariant positions. In order to make it easier to diagnose *why* such
+                                // types are invariant, if any of the type parameters are invariant we reset the reported
+                                // errors and instead force a structural comparison (which will include elaborations that
+                                // reveal the reason).
+                                if (!(reportErrors && some(variances, v => v === Variance.Invariant))) {
+                                    return Ternary.False;
+                                }
+                                // We remember the original error information so we can restore it in case the structural
+                                // comparison unexpectedly succeeds. This can happen when the structural comparison result
+                                // is a Ternary.Maybe for example caused by the recursion depth limiter.
+                                originalErrorInfo = errorInfo;
+                                errorInfo = saveErrorInfo;
+                            }
+                        } else {
+                            // If the source.target type is an interface extending target.target type attempt to use that
+                            // relationship to avoid the need for structural comparison. If source is A<ArgA1, ArgA2, ...>
+                            // and target is B<ArgB1, ArgB2, ...> and A<T, L, ..> extends B<fn1(T,L,..), fn2(T, L,...), ...>
+                            // we then know that A<ArgA1, ArgA2, ...> is assignable to B<fn1(ArgA1,ArgA2,..), fn2(ArgA1, ArgA2,...), ...>
+                            // so if we check the assignability of B<fn1(ArgA1,ArgA2,..), ...> to B<ArgB1, ArgB2, ...>
+                            // we can avoid potentially very expensive resursion through the structure of A and B with different
+                            // type arguments
+
+                            //const sourceConcrete = <TypeReference>source
+                            const sourceGeneric = (<TypeReference>source).target
+                            const targetGeneric = (<TypeReference>target).target
+                            const isSourceInterfaceOrClass = getObjectFlags((<TypeReference>source).target) & ObjectFlags.ClassOrInterface
+                            if(isSourceInterfaceOrClass) {
+                                const referenceBaseTypes = getBaseTypes(sourceGeneric).filter(
+                                    baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
+                                ) as TypeReference[]
+                                compilerOptions.logCheckerShortcut &&
+                                    perfLog(typeToString(sourceGeneric), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
+                                
+                                let sourceBaseTypeCompatibleWithTarget: TypeReference | null = null    
+                                // TODO: Make this check recursive and cachable.
+                                // Is there something like that already computed when the interface/class inheritance is verified?
+                                for(const baseType of referenceBaseTypes) {
+                                    if(baseType.target === targetGeneric) {
+                                        sourceBaseTypeCompatibleWithTarget = baseType
+                                    }
+                                }
+
+                                if(sourceBaseTypeCompatibleWithTarget !== null) {
+                                    compilerOptions.logCheckerShortcut &&
+                                        perfLog("The shortcut is availalbe through type", typeToString(sourceBaseTypeCompatibleWithTarget))
+    
+                                    // TODO: We might have to instantiate the generics with common type arguments
+                                    const result = isRelatedTo(sourceGeneric.target, targetGeneric.target)
+                                    compilerOptions.logCheckerShortcut &&
+                                        perfLog(result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
+                                    
+                                    if(result) {
+                                        const sourceAsInherited = createTypeReference(
+                                            targetGeneric,
+                                            (<TypeReference>target).typeArguments,
+                                            // TODO: Apply the sourceBaseTypeCompatibleWithTarget.typeArguments -> targetGeneric.typeArguments
+                                            // mapping to the sourceConcrete.typeArguments arguments and attach it to the targetGeneric
+                                            //sourceBaseTypeCompatibleWithTarget.typeArguments
+                                        )
+
+                                        compilerOptions.logCheckerShortcut &&
+                                            perfLog("Attempting to relate", typeToString(sourceAsInherited), "to", typeToString(target))
+
+                                        // const result = isRelatedTo(sourceAsInherited, target, false)
+                                        // if(result) {
+                                        //     compilerOptions.logCheckerShortcut &&
+                                        //         perfLog("Success")
+                                        //     return result
+                                        // }
+                                    }
+                                }
+                            }
                         }
                     }
                     // Even if relationship doesn't hold for unions, intersections, or generic type references,
@@ -9582,18 +9651,29 @@ namespace ts {
                             result = isGenericMappedType(source) ? mappedTypeRelatedTo(<MappedType>source, <MappedType>target, reportStructuralErrors) : Ternary.False;
                         }
                         else {
+                            const times = [Date.now()]
                             result = propertiesRelatedTo(source, target, reportStructuralErrors);
+                            times.push(Date.now())
                             if (result) {
                                 result &= signaturesRelatedTo(source, target, SignatureKind.Call, reportStructuralErrors);
+                                times.push(Date.now())
                                 if (result) {
                                     result &= signaturesRelatedTo(source, target, SignatureKind.Construct, reportStructuralErrors);
+                                    times.push(Date.now())
                                     if (result) {
                                         result &= indexTypesRelatedTo(source, target, IndexKind.String, sourceIsPrimitive, reportStructuralErrors);
+                                        times.push(Date.now())
                                         if (result) {
                                             result &= indexTypesRelatedTo(source, target, IndexKind.Number, sourceIsPrimitive, reportStructuralErrors);
+                                            times.push(Date.now())
                                         }
                                     }
                                 }
+                            }
+                            times.push(Date.now())
+                            const elapsedTime = times[times.length-1] - times[0]
+                            if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
+                                perfLog(`Long structural check (${elapsedTime}ms - ${times.slice(1).map((time,i) => times[i+1]-time).join('-')})`) //typeToString(source), typeToString(target))
                             }
                         }
                         if (result) {
@@ -22244,7 +22324,12 @@ namespace ts {
                     // run subsequent checks only if first set succeeded
                     if (checkInheritedPropertiesAreIdentical(type, node.name)) {
                         for (const baseType of getBaseTypes(type)) {
+                            const startTime = Date.now()
                             checkTypeAssignableTo(typeWithThis, getTypeWithThisArgument(baseType, type.thisType), node.name, Diagnostics.Interface_0_incorrectly_extends_interface_1);
+                            const elapsedTime = Date.now() - startTime
+                            if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
+                                perfLog(`Long inheritance check (${elapsedTime}ms) of`, typeToString(type), "against", typeToString(baseType))
+                            }
                         }
                         checkIndexConstraints(type);
                     }

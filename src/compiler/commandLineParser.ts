@@ -292,6 +292,32 @@ namespace ts {
             description: Diagnostics.Parse_in_strict_mode_and_emit_use_strict_for_each_source_file
         },
 
+        // Logs
+        {
+            name: "logLongCheckerCalls",
+            type: "boolean",
+            showInSimplifiedHelpView: true,
+            // TODO: Figure out how to get proper diagnostics
+            category: Diagnostics.Strict_Type_Checking_Options,
+            description: Diagnostics.Enable_all_strict_type_checking_options
+        },
+        {
+            name: "logLongTimeThreshold",
+            type: "number",
+            showInSimplifiedHelpView: true,
+            // TODO: Figure out how to get proper diagnostics
+            category: Diagnostics.Strict_Type_Checking_Options,
+            description: Diagnostics.Enable_all_strict_type_checking_options
+        },
+        {
+            name: "logCheckerShortcut",
+            type: "boolean",
+            showInSimplifiedHelpView: true,
+            // TODO: Figure out how to get proper diagnostics
+            category: Diagnostics.Strict_Type_Checking_Options,
+            description: Diagnostics.Enable_all_strict_type_checking_options
+        },
+
         // Additional Checks
         {
             name: "noUnusedLocals",
@@ -793,7 +819,7 @@ namespace ts {
                         }
                         else {
                             // Check to see if no argument was provided (e.g. "--locale" is the last command-line argument).
-                            if (!args[i] && opt.type !== "boolean") {
+                            if (args[i] === undefined && opt.type !== "boolean") {
                                 errors.push(createCompilerDiagnostic(Diagnostics.Compiler_option_0_expects_an_argument, opt.name));
                             }
 
