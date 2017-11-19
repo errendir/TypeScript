@@ -9585,47 +9585,53 @@ namespace ts {
                             // @ts-ignore
                             const sourceConcrete = <TypeReference>source
                             const sourceGeneric = (<TypeReference>source).target
-                            const targetGeneric = (<TypeReference>target).target
                             const isSourceInterfaceOrClass = getObjectFlags((<TypeReference>source).target) & ObjectFlags.ClassOrInterface
-                            if(isSourceInterfaceOrClass && !!sourceGeneric.typeParameters && !!sourceConcrete.typeArguments && sourceGeneric.typeParameters.length === sourceConcrete.typeArguments.length) {
-                                const referenceBaseTypes = getBaseTypes(sourceGeneric).filter(
-                                    baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
-                                ) as TypeReference[]
-                                compilerOptions.logCheckerShortcut &&
-                                    perfLog(typeToString(sourceGeneric), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
-
-                                const typeMapper = createTypeMapper(sourceGeneric.typeParameters, sourceConcrete.typeArguments)
-                                
+                            if(isSourceInterfaceOrClass && !!sourceGeneric.typeParameters && !!sourceConcrete.typeArguments && sourceGeneric.typeParameters.length === sourceConcrete.typeArguments.length) {                                
                                 let sourceBaseTypeCompatibleWithTarget: TypeReference | null = null
-                                let sourceAsInherited: TypeReference | null = null 
-                                // TODO: Make this check recursive and cachable.
+                                let sourceAsInherited: TypeReference | null = null
+
+                                // TODO: Make this check cachable.
+                                // TODO: Verify that the base type recursion works correctly
                                 // Is there something like that already computed when the interface/class inheritance is verified?
-                                for(const baseType of referenceBaseTypes) {
-                                    if(baseType.target === targetGeneric) {
-                                        sourceBaseTypeCompatibleWithTarget = baseType
-                                        // instantiateType seems to actually be of type <T extends Type>(type: T, mapper: TypeMapper) => T
-                                        sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
+                                const findBaseTargetType = (lookupType: TypeReference, targetGeneric: GenericType) => {
+                                    const referenceBaseTypes = getBaseTypes(lookupType.target).filter(
+                                        baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
+                                    ) as TypeReference[]
+                                    compilerOptions.logCheckerShortcut &&
+                                        perfLog(typeToString(lookupType.target), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
+
+                                    for(const baseType of referenceBaseTypes) {
+                                        if(baseType.target === targetGeneric) {
+                                            sourceBaseTypeCompatibleWithTarget = baseType
+                                            const typeMapper = createTypeMapper(lookupType.target.typeParameters, lookupType.typeArguments)
+                                            // instantiateType seems to actually be of type <T extends Type>(type: T, mapper: TypeMapper) => T
+                                            sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
+                                            return
+                                        }
+                                    }
+
+                                    // Attempt recursive check if needed
+                                    for(const baseType of referenceBaseTypes) {
+                                        const typeMapper = createTypeMapper(lookupType.target.typeParameters, lookupType.typeArguments)
+                                        const sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
+
+                                        findBaseTargetType(sourceAsInherited, targetGeneric)
                                     }
                                 }
 
+                                findBaseTargetType(<TypeReference>source, (<TypeReference>target).target)
+
                                 if(sourceBaseTypeCompatibleWithTarget !== null) {
                                     compilerOptions.logCheckerShortcut &&
-                                        perfLog("A shortcut is availalbe:", typeToString(source), "-(guaranteed, verified)->", typeToString(sourceAsInherited), "->", typeToString(target))
-    
-                                    const result = 1 //isRelatedTo(sourceGeneric.target, targetGeneric.target)
+                                        perfLog("A shortcut is availalbe:", typeToString(source), "-(known)->", typeToString(sourceAsInherited), "->", typeToString(target))
+
+                                    const result = isRelatedTo(sourceAsInherited, target, false)
                                     compilerOptions.logCheckerShortcut &&
-                                        perfLog("\tgenerics verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
-                                    
-                                    // Only attempt the shortcut if the base class relation is already verified
+                                        perfLog("\tconcretes verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
                                     if(result) {
-                                        const result = isRelatedTo(sourceAsInherited, target, false)
                                         compilerOptions.logCheckerShortcut &&
-                                            perfLog("\tconcretes verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
-                                        if(result) {
-                                            compilerOptions.logCheckerShortcut &&
-                                                perfLog("Shortcut was successfully taken")
-                                            return result
-                                        }
+                                            perfLog("Shortcut was successfully taken")
+                                        return result
                                     }
                                 }
                             }
@@ -9673,7 +9679,6 @@ namespace ts {
                             times.push(Date.now())
                             const elapsedTime = times[times.length-1] - times[0]
                             if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
-                                debugger;
                                 perfLog(`Long structural check (${elapsedTime}ms - ${times.slice(1).map((time,i) => time-times[i]).join('-')})`, typeToString(source), typeToString(target))
                             }
                         }
@@ -22315,7 +22320,6 @@ namespace ts {
         }
 
         function checkInterfaceDeclaration(node: InterfaceDeclaration) {
-            debugger;
             // Grammar checking
             if (!checkGrammarDecoratorsAndModifiers(node)) checkGrammarInterfaceDeclaration(node);
 
