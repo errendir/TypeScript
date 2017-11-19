@@ -9407,6 +9407,9 @@ namespace ts {
                     for (let i = 0; i < maybeCount; i++) {
                         // If source and target are already being compared, consider them related with assumptions
                         if (id === maybeKeys[i]) {
+                            if(compilerOptions.logCheckerShortcut) {
+                                perfLog("Relating", typeToString(source), 'to', typeToString(target), 'finished due to cycle danger')
+                            }
                             return Ternary.Maybe;
                         }
                     }
@@ -9579,53 +9582,50 @@ namespace ts {
                             // we can avoid potentially very expensive resursion through the structure of A and B with different
                             // type arguments
 
-                            //const sourceConcrete = <TypeReference>source
+                            // @ts-ignore
+                            const sourceConcrete = <TypeReference>source
                             const sourceGeneric = (<TypeReference>source).target
                             const targetGeneric = (<TypeReference>target).target
                             const isSourceInterfaceOrClass = getObjectFlags((<TypeReference>source).target) & ObjectFlags.ClassOrInterface
-                            if(isSourceInterfaceOrClass) {
+                            if(isSourceInterfaceOrClass && !!sourceGeneric.typeParameters && !!sourceConcrete.typeArguments && sourceGeneric.typeParameters.length === sourceConcrete.typeArguments.length) {
                                 const referenceBaseTypes = getBaseTypes(sourceGeneric).filter(
                                     baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
                                 ) as TypeReference[]
                                 compilerOptions.logCheckerShortcut &&
                                     perfLog(typeToString(sourceGeneric), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
+
+                                const typeMapper = createTypeMapper(sourceGeneric.typeParameters, sourceConcrete.typeArguments)
                                 
-                                let sourceBaseTypeCompatibleWithTarget: TypeReference | null = null    
+                                let sourceBaseTypeCompatibleWithTarget: TypeReference | null = null
+                                let sourceAsInherited: TypeReference | null = null 
                                 // TODO: Make this check recursive and cachable.
                                 // Is there something like that already computed when the interface/class inheritance is verified?
                                 for(const baseType of referenceBaseTypes) {
                                     if(baseType.target === targetGeneric) {
                                         sourceBaseTypeCompatibleWithTarget = baseType
+                                        // instantiateType seems to actually be of type <T extends Type>(type: T, mapper: TypeMapper) => T
+                                        sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
                                     }
                                 }
 
                                 if(sourceBaseTypeCompatibleWithTarget !== null) {
                                     compilerOptions.logCheckerShortcut &&
-                                        perfLog("The shortcut is availalbe through type", typeToString(sourceBaseTypeCompatibleWithTarget))
+                                        perfLog("A shortcut is availalbe:", typeToString(source), "-(guaranteed, verified)->", typeToString(sourceAsInherited), "->", typeToString(target))
     
-                                    // TODO: We might have to instantiate the generics with common type arguments
-                                    const result = isRelatedTo(sourceGeneric.target, targetGeneric.target)
+                                    const result = 1 //isRelatedTo(sourceGeneric.target, targetGeneric.target)
                                     compilerOptions.logCheckerShortcut &&
-                                        perfLog(result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
+                                        perfLog("\tgenerics verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
                                     
+                                    // Only attempt the shortcut if the base class relation is already verified
                                     if(result) {
-                                        const sourceAsInherited = createTypeReference(
-                                            targetGeneric,
-                                            (<TypeReference>target).typeArguments,
-                                            // TODO: Apply the sourceBaseTypeCompatibleWithTarget.typeArguments -> targetGeneric.typeArguments
-                                            // mapping to the sourceConcrete.typeArguments arguments and attach it to the targetGeneric
-                                            //sourceBaseTypeCompatibleWithTarget.typeArguments
-                                        )
-
+                                        const result = isRelatedTo(sourceAsInherited, target, false)
                                         compilerOptions.logCheckerShortcut &&
-                                            perfLog("Attempting to relate", typeToString(sourceAsInherited), "to", typeToString(target))
-
-                                        // const result = isRelatedTo(sourceAsInherited, target, false)
-                                        // if(result) {
-                                        //     compilerOptions.logCheckerShortcut &&
-                                        //         perfLog("Success")
-                                        //     return result
-                                        // }
+                                            perfLog("\tconcretes verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
+                                        if(result) {
+                                            compilerOptions.logCheckerShortcut &&
+                                                perfLog("Shortcut was successfully taken")
+                                            return result
+                                        }
                                     }
                                 }
                             }
@@ -9673,7 +9673,8 @@ namespace ts {
                             times.push(Date.now())
                             const elapsedTime = times[times.length-1] - times[0]
                             if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
-                                perfLog(`Long structural check (${elapsedTime}ms - ${times.slice(1).map((time,i) => times[i+1]-time).join('-')})`) //typeToString(source), typeToString(target))
+                                debugger;
+                                perfLog(`Long structural check (${elapsedTime}ms - ${times.slice(1).map((time,i) => time-times[i]).join('-')})`, typeToString(source), typeToString(target))
                             }
                         }
                         if (result) {
@@ -9776,7 +9777,16 @@ namespace ts {
                                 }
                                 return Ternary.False;
                             }
+                            const startTime = Date.now()
+                            if(compilerOptions.logCheckerShortcut) {
+                                perfLog("Started property relation")
+                            }
                             const related = isRelatedTo(getTypeOfSymbol(sourceProp), getTypeOfSymbol(targetProp), reportErrors);
+                            if(compilerOptions.logCheckerShortcut) {
+                                const elapsedTime = Date.now() - startTime
+                                perfLog(`Finished property relation in ${elapsedTime}ms`, typeToString(getTypeOfSymbol(sourceProp)), typeToString(getTypeOfSymbol(targetProp)))
+                                perfLog(symbolToString(sourceProp), symbolToString(targetProp))
+                            }
                             if (!related) {
                                 if (reportErrors) {
                                     reportError(Diagnostics.Types_of_property_0_are_incompatible, symbolToString(targetProp));
@@ -22305,6 +22315,7 @@ namespace ts {
         }
 
         function checkInterfaceDeclaration(node: InterfaceDeclaration) {
+            debugger;
             // Grammar checking
             if (!checkGrammarDecoratorsAndModifiers(node)) checkGrammarInterfaceDeclaration(node);
 
