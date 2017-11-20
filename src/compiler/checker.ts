@@ -2,9 +2,6 @@
 /// <reference path="binder.ts"/>
 /// <reference path="symbolWalker.ts" />
 
-// @ts-ignore
-const perfLog = console.log
-
 /* @internal */
 namespace ts {
     const ambientModuleSymbolRegex = /^".+"$/;
@@ -9674,7 +9671,6 @@ namespace ts {
             // equal and infinitely expanding. Fourth, if we have reached a depth of 100 nested comparisons, assume we have runaway recursion
             // and issue an error. Otherwise, actually compare the structure of the two types.
             function recursiveTypeRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
-                const startTime = Date.now()
                 if (overflow) {
                     return Ternary.False;
                 }
@@ -9699,9 +9695,6 @@ namespace ts {
                     for (let i = 0; i < maybeCount; i++) {
                         // If source and target are already being compared, consider them related with assumptions
                         if (id === maybeKeys[i]) {
-                            if(compilerOptions.logCheckerShortcut) {
-                                //perfLog("Relating", typeToString(source), 'to', typeToString(target), 'finished due to cycle danger')
-                            }
                             return Ternary.Maybe;
                         }
                     }
@@ -9736,10 +9729,6 @@ namespace ts {
                     // assumptions it will also be false without assumptions)
                     relation.set(id, reportErrors ? RelationComparisonResult.FailedAndReported : RelationComparisonResult.Failed);
                     maybeCount = maybeStart;
-                }
-                const elapsedTime = Date.now() - startTime
-                if(depth < 3 && compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
-                    perfLog("Long check", elapsedTime, typeToString(source), typeToString(target))
                 }
                 return result;
             }
@@ -9875,8 +9864,7 @@ namespace ts {
                             // type arguments
 
                             const isSourceInterfaceOrClass = getObjectFlags((<TypeReference>source).target) & ObjectFlags.ClassOrInterface
-                            // TODO: Remove the second condition
-                            if(isSourceInterfaceOrClass && compilerOptions.logCheckerShortcut) {
+                            if(isSourceInterfaceOrClass) {
                                 let sourceAsBaseType: TypeReference | null = null
 
                                 // TODO: Make this check cachable.
@@ -9886,7 +9874,6 @@ namespace ts {
                                     const referenceBaseTypes = getBaseTypes(lookupType.target).filter(
                                         baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
                                     ) as TypeReference[]
-                                    //perfLog(typeToString(lookupType.target), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
 
                                     const needsToBeMapped = lookupType.typeArguments !== undefined
                                     let thisType: Type
@@ -9939,13 +9926,10 @@ namespace ts {
                                 if(sourceAsBaseType !== null) {
                                     const shortcutRelationKey = getRelationKey(source, sourceAsBaseType, relation)
                                     const currentlyVerifyingShortcut = shortcutRelationKey === maybeExtensionRelationKey
-                                    
-                                    //perfLog("A shortcut is availalbe:", typeToString(source), `-(${shortcutRelationKey};${maybeExtensionRelationKey};${currentlyVerifyingShortcut})->`, typeToString(sourceAsBaseType), "->", typeToString(target))
 
                                     if(!currentlyVerifyingShortcut) {
                                         result = isRelatedTo(sourceAsBaseType, target, false)
                                         if(result) {
-                                            //perfLog("Shortcut was successfully taken")
                                             return result
                                         }
                                     }
@@ -22760,15 +22744,10 @@ namespace ts {
                     // run subsequent checks only if first set succeeded
                     if (checkInheritedPropertiesAreIdentical(type, node.name)) {
                         for (const baseType of getBaseTypes(type)) {
-                            const startTime = Date.now()
                             const target = getTypeWithThisArgument(baseType, type.thisType);
                             maybeExtensionRelationKey = getRelationKey(typeWithThis, target, assignableRelation);
                             checkTypeAssignableTo(typeWithThis, target, node.name, Diagnostics.Interface_0_incorrectly_extends_interface_1);
                             maybeExtensionRelationKey = null
-                            const elapsedTime = Date.now() - startTime
-                            if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
-                                perfLog(`Long inheritance check (${elapsedTime}ms) of`, typeToString(type), "against", typeToString(baseType))
-                            }
                         }
                         checkIndexConstraints(type);
                     }
