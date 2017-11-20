@@ -85,6 +85,8 @@ namespace ts {
         /** This will be set during calls to `getResolvedSignature` where services determines an apparent number of arguments greater than what is actually provided. */
         let apparentArgumentCount: number | undefined;
 
+        let maybeExtensionRelationKey: string | null = null;
+
         // for public members that accept a Node or one of its subtypes, we must guard against
         // synthetic nodes created during transformations by calling `getParseTreeNode`.
         // for most of these, we perform the guard only on `checker` to avoid any possible
@@ -9408,7 +9410,7 @@ namespace ts {
                         // If source and target are already being compared, consider them related with assumptions
                         if (id === maybeKeys[i]) {
                             if(compilerOptions.logCheckerShortcut) {
-                                perfLog("Relating", typeToString(source), 'to', typeToString(target), 'finished due to cycle danger')
+                                //perfLog("Relating", typeToString(source), 'to', typeToString(target), 'finished due to cycle danger')
                             }
                             return Ternary.Maybe;
                         }
@@ -9582,13 +9584,10 @@ namespace ts {
                             // we can avoid potentially very expensive resursion through the structure of A and B with different
                             // type arguments
 
-                            // @ts-ignore
-                            const sourceConcrete = <TypeReference>source
-                            const sourceGeneric = (<TypeReference>source).target
                             const isSourceInterfaceOrClass = getObjectFlags((<TypeReference>source).target) & ObjectFlags.ClassOrInterface
-                            if(isSourceInterfaceOrClass && !!sourceGeneric.typeParameters && !!sourceConcrete.typeArguments && sourceGeneric.typeParameters.length === sourceConcrete.typeArguments.length) {                                
-                                let sourceBaseTypeCompatibleWithTarget: TypeReference | null = null
-                                let sourceAsInherited: TypeReference | null = null
+                            // TODO: Remove the second condition
+                            if(isSourceInterfaceOrClass && compilerOptions.logCheckerShortcut) {
+                                let sourceAsBaseType: TypeReference | null = null
 
                                 // TODO: Make this check cachable.
                                 // TODO: Verify that the base type recursion works correctly
@@ -9597,41 +9596,68 @@ namespace ts {
                                     const referenceBaseTypes = getBaseTypes(lookupType.target).filter(
                                         baseType => (getObjectFlags(baseType) & ObjectFlags.Reference)
                                     ) as TypeReference[]
-                                    compilerOptions.logCheckerShortcut &&
-                                        perfLog(typeToString(lookupType.target), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
+                                    //perfLog(typeToString(lookupType.target), "inherits from", referenceBaseTypes.map(type => typeToString(type)).join(","))
+
+                                    const needsToBeMapped = lookupType.typeArguments !== undefined
+                                    let thisType: Type
+                                    let typeMapper: TypeMapper
+                                    if(needsToBeMapped) {
+                                        const typeParameters = lookupType.target.typeParameters || emptyArray
+                                        let typeArguments = lookupType.typeArguments
+                                        // Remove "this" type argument
+                                        if(typeArguments.length === typeParameters.length + 1) {
+                                            thisType = typeArguments[typeArguments.length-1]
+                                            typeArguments = typeArguments.slice(0,-1)
+                                        }
+                                        typeMapper = createTypeMapper(typeParameters, typeArguments)    
+                                    }
+                                    const stepDownIntoBaseType = (baseType: TypeReference): TypeReference => {
+                                        let sourceAsBaseType: TypeReference = baseType
+                                        sourceAsBaseType = (needsToBeMapped ? instantiateType(sourceAsBaseType, typeMapper) : sourceAsBaseType) as TypeReference
+                                        sourceAsBaseType = (thisType ? getTypeWithThisArgument(sourceAsBaseType, thisType) : sourceAsBaseType) as TypeReference
+
+                                        // TODO: Is there a method for forcibly replacing the this type? Why is it even necessary?
+                                        if(thisType) {
+                                            sourceAsBaseType = createTypeReference(sourceAsBaseType.target,
+                                                concatenate(sourceAsBaseType.typeArguments.slice(0, sourceAsBaseType.target.typeParameters.length), [thisType])
+                                            )
+                                        }
+                                        return sourceAsBaseType as TypeReference
+                                    }
 
                                     for(const baseType of referenceBaseTypes) {
                                         if(baseType.target === targetGeneric) {
-                                            sourceBaseTypeCompatibleWithTarget = baseType
-                                            const typeMapper = createTypeMapper(lookupType.target.typeParameters, lookupType.typeArguments)
-                                            // instantiateType seems to actually be of type <T extends Type>(type: T, mapper: TypeMapper) => T
-                                            sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
+                                            // Both `getTypeWithThisArgument` and `instantiateType` seem to actually
+                                            // be of type <T extends Type>(type: T, mapper: TypeMapper) => T
+                                            sourceAsBaseType = stepDownIntoBaseType(baseType)
+
                                             return
                                         }
                                     }
 
                                     // Attempt recursive check if needed
                                     for(const baseType of referenceBaseTypes) {
-                                        const typeMapper = createTypeMapper(lookupType.target.typeParameters, lookupType.typeArguments)
-                                        const sourceAsInherited = <TypeReference>instantiateType(baseType, typeMapper)
-
-                                        findBaseTargetType(sourceAsInherited, targetGeneric)
+                                        const sourceAsBaseType = stepDownIntoBaseType(baseType)
+                                        findBaseTargetType(sourceAsBaseType, targetGeneric)
                                     }
                                 }
 
                                 findBaseTargetType(<TypeReference>source, (<TypeReference>target).target)
+                                
+                                //const ternaryToString = (result: Ternary) => result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?"
 
-                                if(sourceBaseTypeCompatibleWithTarget !== null) {
-                                    compilerOptions.logCheckerShortcut &&
-                                        perfLog("A shortcut is availalbe:", typeToString(source), "-(known)->", typeToString(sourceAsInherited), "->", typeToString(target))
+                                if(sourceAsBaseType !== null) {
+                                    const shortcutRelationKey = getRelationKey(source, sourceAsBaseType, relation)
+                                    const currentlyVerifyingShortcut = shortcutRelationKey === maybeExtensionRelationKey
+                                    
+                                    //perfLog("A shortcut is availalbe:", typeToString(source), `-(${shortcutRelationKey};${maybeExtensionRelationKey};${currentlyVerifyingShortcut})->`, typeToString(sourceAsBaseType), "->", typeToString(target))
 
-                                    const result = isRelatedTo(sourceAsInherited, target, false)
-                                    compilerOptions.logCheckerShortcut &&
-                                        perfLog("\tconcretes verified", result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?")
-                                    if(result) {
-                                        compilerOptions.logCheckerShortcut &&
-                                            perfLog("Shortcut was successfully taken")
-                                        return result
+                                    if(!currentlyVerifyingShortcut) {
+                                        result = isRelatedTo(sourceAsBaseType, target, false)
+                                        if(result) {
+                                            //perfLog("Shortcut was successfully taken")
+                                            return result
+                                        }
                                     }
                                 }
                             }
@@ -9657,29 +9683,18 @@ namespace ts {
                             result = isGenericMappedType(source) ? mappedTypeRelatedTo(<MappedType>source, <MappedType>target, reportStructuralErrors) : Ternary.False;
                         }
                         else {
-                            const times = [Date.now()]
                             result = propertiesRelatedTo(source, target, reportStructuralErrors);
-                            times.push(Date.now())
                             if (result) {
                                 result &= signaturesRelatedTo(source, target, SignatureKind.Call, reportStructuralErrors);
-                                times.push(Date.now())
                                 if (result) {
                                     result &= signaturesRelatedTo(source, target, SignatureKind.Construct, reportStructuralErrors);
-                                    times.push(Date.now())
                                     if (result) {
                                         result &= indexTypesRelatedTo(source, target, IndexKind.String, sourceIsPrimitive, reportStructuralErrors);
-                                        times.push(Date.now())
                                         if (result) {
                                             result &= indexTypesRelatedTo(source, target, IndexKind.Number, sourceIsPrimitive, reportStructuralErrors);
-                                            times.push(Date.now())
                                         }
                                     }
                                 }
-                            }
-                            times.push(Date.now())
-                            const elapsedTime = times[times.length-1] - times[0]
-                            if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
-                                perfLog(`Long structural check (${elapsedTime}ms - ${times.slice(1).map((time,i) => time-times[i]).join('-')})`, typeToString(source), typeToString(target))
                             }
                         }
                         if (result) {
@@ -9782,16 +9797,7 @@ namespace ts {
                                 }
                                 return Ternary.False;
                             }
-                            const startTime = Date.now()
-                            if(compilerOptions.logCheckerShortcut) {
-                                perfLog("Started property relation")
-                            }
                             const related = isRelatedTo(getTypeOfSymbol(sourceProp), getTypeOfSymbol(targetProp), reportErrors);
-                            if(compilerOptions.logCheckerShortcut) {
-                                const elapsedTime = Date.now() - startTime
-                                perfLog(`Finished property relation in ${elapsedTime}ms`, typeToString(getTypeOfSymbol(sourceProp)), typeToString(getTypeOfSymbol(targetProp)))
-                                perfLog(symbolToString(sourceProp), symbolToString(targetProp))
-                            }
                             if (!related) {
                                 if (reportErrors) {
                                     reportError(Diagnostics.Types_of_property_0_are_incompatible, symbolToString(targetProp));
@@ -22340,7 +22346,10 @@ namespace ts {
                     if (checkInheritedPropertiesAreIdentical(type, node.name)) {
                         for (const baseType of getBaseTypes(type)) {
                             const startTime = Date.now()
-                            checkTypeAssignableTo(typeWithThis, getTypeWithThisArgument(baseType, type.thisType), node.name, Diagnostics.Interface_0_incorrectly_extends_interface_1);
+                            const target = getTypeWithThisArgument(baseType, type.thisType);
+                            maybeExtensionRelationKey = getRelationKey(typeWithThis, target, assignableRelation);
+                            checkTypeAssignableTo(typeWithThis, target, node.name, Diagnostics.Interface_0_incorrectly_extends_interface_1);
+                            maybeExtensionRelationKey = null
                             const elapsedTime = Date.now() - startTime
                             if(compilerOptions.logLongCheckerCalls && elapsedTime > (compilerOptions.logLongTimeThreshold || 100)) {
                                 perfLog(`Long inheritance check (${elapsedTime}ms) of`, typeToString(type), "against", typeToString(baseType))
