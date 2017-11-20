@@ -82,7 +82,7 @@ namespace ts {
         /** This will be set during calls to `getResolvedSignature` where services determines an apparent number of arguments greater than what is actually provided. */
         let apparentArgumentCount: number | undefined;
 
-        let maybeExtensionRelationKey: string | null = null;
+        let justStartedExtensionCheck: boolean = false;
 
         // for public members that accept a Node or one of its subtypes, we must guard against
         // synthetic nodes created during transformations by calling `getParseTreeNode`.
@@ -9912,11 +9912,12 @@ namespace ts {
                                         }
                                     }
 
-                                    // Attempt recursive check if needed
-                                    for(const baseType of referenceBaseTypes) {
-                                        const sourceAsBaseType = stepDownIntoBaseType(baseType)
-                                        findBaseTargetType(sourceAsBaseType, targetGeneric)
-                                    }
+                                    // Recursive checks are not possible due to subclassing not always being transitive
+
+                                    // for(const baseType of referenceBaseTypes) {
+                                    //     const sourceAsBaseType = stepDownIntoBaseType(baseType)
+                                    //     findBaseTargetType(sourceAsBaseType, targetGeneric)
+                                    // }
                                 }
 
                                 findBaseTargetType(<TypeReference>source, (<TypeReference>target).target)
@@ -9924,14 +9925,13 @@ namespace ts {
                                 //const ternaryToString = (result: Ternary) => result === Ternary.Maybe ? "maybe" : result === Ternary.True ? "true" : result === Ternary.False ? "false" : "waat?"
 
                                 if(sourceAsBaseType !== null) {
-                                    const shortcutRelationKey = getRelationKey(source, sourceAsBaseType, relation)
-                                    const currentlyVerifyingShortcut = shortcutRelationKey === maybeExtensionRelationKey
-
-                                    if(!currentlyVerifyingShortcut) {
+                                    if(!justStartedExtensionCheck) {
                                         result = isRelatedTo(sourceAsBaseType, target, false)
                                         if(result) {
                                             return result
                                         }
+                                    } else {
+                                        justStartedExtensionCheck = false
                                     }
                                 }
                             }
@@ -22523,7 +22523,9 @@ namespace ts {
                             }
                         }
                     }
+                    justStartedExtensionCheck = true
                     checkTypeAssignableTo(typeWithThis, getTypeWithThisArgument(baseType, type.thisType), node.name || node, Diagnostics.Class_0_incorrectly_extends_base_class_1);
+                    justStartedExtensionCheck = false
                     checkTypeAssignableTo(staticType, getTypeWithoutSignatures(staticBaseType), node.name || node,
                         Diagnostics.Class_static_side_0_incorrectly_extends_base_class_static_side_1);
                     if (baseConstructorType.flags & TypeFlags.TypeVariable && !isMixinConstructorType(staticType)) {
@@ -22745,9 +22747,9 @@ namespace ts {
                     if (checkInheritedPropertiesAreIdentical(type, node.name)) {
                         for (const baseType of getBaseTypes(type)) {
                             const target = getTypeWithThisArgument(baseType, type.thisType);
-                            maybeExtensionRelationKey = getRelationKey(typeWithThis, target, assignableRelation);
+                            justStartedExtensionCheck = true;
                             checkTypeAssignableTo(typeWithThis, target, node.name, Diagnostics.Interface_0_incorrectly_extends_interface_1);
-                            maybeExtensionRelationKey = null
+                            justStartedExtensionCheck = false;
                         }
                         checkIndexConstraints(type);
                     }
