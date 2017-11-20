@@ -9896,7 +9896,7 @@ namespace ts {
                                         // TODO: Is there a method for forcibly replacing the this type? Why is it even necessary?
                                         if(thisType) {
                                             sourceAsBaseType = createTypeReference(sourceAsBaseType.target,
-                                                concatenate(sourceAsBaseType.typeArguments.slice(0, sourceAsBaseType.target.typeParameters.length), [thisType])
+                                                concatenate(sourceAsBaseType.typeArguments.slice(0, (sourceAsBaseType.target.typeParameters || emptyArray).length), [thisType])
                                             )
                                         }
                                         return sourceAsBaseType as TypeReference
