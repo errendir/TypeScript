@@ -9921,7 +9921,6 @@ namespace ts {
                                     }
 
                                     // Recursive checks are not possible due to subclassing not always being transitive
-
                                     // for(const baseType of referenceBaseTypes) {
                                     //     const sourceAsBaseType = stepDownIntoBaseType(baseType)
                                     //     findBaseTargetType(sourceAsBaseType, targetGeneric)
