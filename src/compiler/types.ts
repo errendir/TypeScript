@@ -2540,7 +2540,7 @@ namespace ts {
     export interface ParseConfigHost {
         useCaseSensitiveFileNames: boolean;
 
-        readDirectory(rootDir: string, extensions: ReadonlyArray<string>, excludes: ReadonlyArray<string>, includes: ReadonlyArray<string>, depth: number): string[];
+        readDirectory(rootDir: string, extensions: ReadonlyArray<string>, excludes: ReadonlyArray<string> | undefined, includes: ReadonlyArray<string>, depth?: number): string[];
 
         /**
          * Gets a value indicating whether the specified path exists and is a file.
@@ -3251,6 +3251,7 @@ namespace ts {
         ContainsPrivate   = 1 << 8,         // Synthetic property with private constituent(s)
         ContainsStatic    = 1 << 9,         // Synthetic property with static constituent(s)
         Late              = 1 << 10,        // Late-bound symbol for a computed property with a dynamic name
+        ReverseMapped     = 1 << 11,        // property of reverse-inferred homomorphic mapped type.
         Synthetic = SyntheticProperty | SyntheticMethod
     }
 
@@ -3258,6 +3259,12 @@ namespace ts {
     export interface TransientSymbol extends Symbol, SymbolLinks {
         checkFlags: CheckFlags;
         isRestParameter?: boolean;
+    }
+
+    /* @internal */
+    export interface ReverseMappedSymbol extends TransientSymbol {
+        propertyType: Type;
+        mappedType: MappedType;
     }
 
     export const enum InternalSymbolName {
@@ -3494,6 +3501,7 @@ namespace ts {
         EvolvingArray    = 1 << 8,  // Evolving array type
         ObjectLiteralPatternWithComputedProperties = 1 << 9,  // Object literal pattern with computed properties
         ContainsSpread   = 1 << 10, // Object literal contains spread operation
+        ReverseMapped = 1 << 11,    // Object contains a property from a reverse-mapped type
         ClassOrInterface = Class | Interface
     }
 
@@ -3599,6 +3607,12 @@ namespace ts {
     export interface EvolvingArrayType extends ObjectType {
         elementType: Type;      // Element expressions of evolving array type
         finalArrayType?: Type;  // Final array type of evolving array type
+    }
+
+    /* @internal */
+    export interface ReverseMappedType extends ObjectType {
+        source: Type;
+        mappedType: MappedType;
     }
 
     /* @internal */
@@ -4366,11 +4380,11 @@ namespace ts {
          * If resolveModuleNames is implemented then implementation for members from ModuleResolutionHost can be just
          * 'throw new Error("NotImplemented")'
          */
-        resolveModuleNames?(moduleNames: string[], containingFile: string, reusedNames?: string[]): ResolvedModule[];
+        resolveModuleNames?(moduleNames: string[], containingFile: string, reusedNames?: string[]): (ResolvedModule | undefined)[];
         /**
          * This method is a companion for 'resolveModuleNames' and is used to resolve 'types' references to actual type declaration files
          */
-        resolveTypeReferenceDirectives?(typeReferenceDirectiveNames: string[], containingFile: string): ResolvedTypeReferenceDirective[];
+        resolveTypeReferenceDirectives?(typeReferenceDirectiveNames: string[], containingFile: string): (ResolvedTypeReferenceDirective | undefined)[];
         getEnvironmentVariable?(name: string): string;
         /* @internal */ onReleaseOldSourceFile?(oldSourceFile: SourceFile, oldOptions: CompilerOptions): void;
         /* @internal */ hasInvalidatedResolution?: HasInvalidatedResolution;
