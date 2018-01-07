@@ -10116,7 +10116,7 @@ namespace ts {
 
                                 if(sourceAsBaseType !== null) {
                                     if(!justStartedExtensionCheck) {
-                                        result = isRelatedTo(sourceAsBaseType, target, false)
+                                        result = isIdenticalTo(sourceAsBaseType, target)
                                         if(result) {
                                             return result
                                         }
