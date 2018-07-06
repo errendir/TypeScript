@@ -1,5 +1,15 @@
 /* @internal */
 namespace ts {
+    function ternaryToString(ret: Ternary) {
+        return ret === Ternary.True
+                ? "True"
+            : ret === Ternary.False
+                ? "False"
+            : ret === Ternary.Maybe
+                ? "Maybe"
+            : "Error";
+    }
+
     const ambientModuleSymbolRegex = /^".+"$/;
 
     let nextSymbolId = 1;
@@ -44,6 +54,41 @@ namespace ts {
         let requestedExternalEmitHelpers: ExternalEmitHelpers;
         let externalHelpersModule: Symbol;
 
+        // Log stuff
+        let level = 0;
+        const log = (...args: any[]) => {
+            // @ts-ignore
+            console.log(Array.from(new Array(level)).map(() => "  ").join("") + args.join(" "));
+        };
+
+        const callsToBreakOn = ["propertiesRelatedTo(C<T>,A,true)"];
+
+        const wrapLogCustom = <M extends any[], T>(printArgs: (...args: M) => string, printRet: (ret: T) => string) => {
+            return (fn: (...args: M) => T) => {
+                const functionName = fn.name;
+                return (...args: M) => {
+                    const fnCallString = `${functionName}(${printArgs(...args)})`;
+                    log(`${fnCallString}`);
+                    level += 1;
+                    if (callsToBreakOn.indexOf(fnCallString) !== -1) {
+                        debugger;
+                    }
+                    const ret = fn(...args);
+                    level -= 1;
+                    log(`${fnCallString} = ${printRet(ret)}`);
+                    return ret;
+                };
+            };
+        };
+
+        const wrapLogUsual = wrapLogCustom(
+            (type: Type, ...args: any[]) => `${typeToString(type)}${args.length > 0 ? "," + args.join(",") : ""}`,
+            (ret: Type | undefined) => `${ret && typeToString(ret)}`
+        );
+        const wrapLog = <M extends any[]>(fn: (type: Type, ...args: M) => Type | undefined): (type: Type, ...args: M) => Type | undefined => {
+            return wrapLogUsual(fn as any);
+        };
+
         // tslint:disable variable-name
         const Symbol = objectAllocator.getSymbolConstructor();
         const Type = objectAllocator.getTypeConstructor();
@@ -80,280 +125,6 @@ namespace ts {
 
         /** This will be set during calls to `getResolvedSignature` where services determines an apparent number of arguments greater than what is actually provided. */
         let apparentArgumentCount: number | undefined;
-
-        // for public members that accept a Node or one of its subtypes, we must guard against
-        // synthetic nodes created during transformations by calling `getParseTreeNode`.
-        // for most of these, we perform the guard only on `checker` to avoid any possible
-        // extra cost of calling `getParseTreeNode` when calling these functions from inside the
-        // checker.
-        const checker: TypeChecker = {
-            getNodeCount: () => sum(host.getSourceFiles(), "nodeCount"),
-            getIdentifierCount: () => sum(host.getSourceFiles(), "identifierCount"),
-            getSymbolCount: () => sum(host.getSourceFiles(), "symbolCount") + symbolCount,
-            getTypeCount: () => typeCount,
-            isUndefinedSymbol: symbol => symbol === undefinedSymbol,
-            isArgumentsSymbol: symbol => symbol === argumentsSymbol,
-            isUnknownSymbol: symbol => symbol === unknownSymbol,
-            getMergedSymbol,
-            getDiagnostics,
-            getGlobalDiagnostics,
-            getTypeOfSymbolAtLocation: (symbol, location) => {
-                location = getParseTreeNode(location);
-                return location ? getTypeOfSymbolAtLocation(symbol, location) : errorType;
-            },
-            getSymbolsOfParameterPropertyDeclaration: (parameterIn, parameterName) => {
-                const parameter = getParseTreeNode(parameterIn, isParameter);
-                if (parameter === undefined) return Debug.fail("Cannot get symbols of a synthetic parameter that cannot be resolved to a parse-tree node.");
-                return getSymbolsOfParameterPropertyDeclaration(parameter, escapeLeadingUnderscores(parameterName));
-            },
-            getDeclaredTypeOfSymbol,
-            getPropertiesOfType,
-            getPropertyOfType: (type, name) => getPropertyOfType(type, escapeLeadingUnderscores(name)),
-            getTypeOfPropertyOfType: (type, name) => getTypeOfPropertyOfType(type, escapeLeadingUnderscores(name)),
-            getIndexInfoOfType,
-            getSignaturesOfType,
-            getIndexTypeOfType,
-            getBaseTypes,
-            getBaseTypeOfLiteralType,
-            getWidenedType,
-            getTypeFromTypeNode: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isTypeNode);
-                return node ? getTypeFromTypeNode(node) : errorType;
-            },
-            getParameterType: getTypeAtPosition,
-            getReturnTypeOfSignature,
-            getNullableType,
-            getNonNullableType,
-            typeToTypeNode: nodeBuilder.typeToTypeNode,
-            indexInfoToIndexSignatureDeclaration: nodeBuilder.indexInfoToIndexSignatureDeclaration,
-            signatureToSignatureDeclaration: nodeBuilder.signatureToSignatureDeclaration,
-            symbolToEntityName: nodeBuilder.symbolToEntityName as (symbol: Symbol, meaning: SymbolFlags, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => EntityName, // TODO: GH#18217
-            symbolToExpression: nodeBuilder.symbolToExpression as (symbol: Symbol, meaning: SymbolFlags, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => Expression, // TODO: GH#18217
-            symbolToTypeParameterDeclarations: nodeBuilder.symbolToTypeParameterDeclarations,
-            symbolToParameterDeclaration: nodeBuilder.symbolToParameterDeclaration as (symbol: Symbol, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => ParameterDeclaration, // TODO: GH#18217
-            typeParameterToDeclaration: nodeBuilder.typeParameterToDeclaration as (parameter: TypeParameter, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => TypeParameterDeclaration, // TODO: GH#18217
-            getSymbolsInScope: (location, meaning) => {
-                location = getParseTreeNode(location);
-                return location ? getSymbolsInScope(location, meaning) : [];
-            },
-            getSymbolAtLocation: node => {
-                node = getParseTreeNode(node);
-                return node ? getSymbolAtLocation(node) : undefined;
-            },
-            getShorthandAssignmentValueSymbol: node => {
-                node = getParseTreeNode(node);
-                return node ? getShorthandAssignmentValueSymbol(node) : undefined;
-            },
-            getExportSpecifierLocalTargetSymbol: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isExportSpecifier);
-                return node ? getExportSpecifierLocalTargetSymbol(node) : undefined;
-            },
-            getExportSymbolOfSymbol(symbol) {
-                return getMergedSymbol(symbol.exportSymbol || symbol);
-            },
-            getTypeAtLocation: node => {
-                node = getParseTreeNode(node);
-                return node ? getTypeOfNode(node) : errorType;
-            },
-            getPropertySymbolOfDestructuringAssignment: locationIn => {
-                const location = getParseTreeNode(locationIn, isIdentifier);
-                return location ? getPropertySymbolOfDestructuringAssignment(location) : undefined;
-            },
-            signatureToString: (signature, enclosingDeclaration, flags, kind) => {
-                return signatureToString(signature, getParseTreeNode(enclosingDeclaration), flags, kind);
-            },
-            typeToString: (type, enclosingDeclaration, flags) => {
-                return typeToString(type, getParseTreeNode(enclosingDeclaration), flags);
-            },
-            symbolToString: (symbol, enclosingDeclaration, meaning, flags) => {
-                return symbolToString(symbol, getParseTreeNode(enclosingDeclaration), meaning, flags);
-            },
-            typePredicateToString: (predicate, enclosingDeclaration, flags) => {
-                return typePredicateToString(predicate, getParseTreeNode(enclosingDeclaration), flags);
-            },
-            writeSignature: (signature, enclosingDeclaration, flags, kind, writer) => {
-                return signatureToString(signature, getParseTreeNode(enclosingDeclaration), flags, kind, writer);
-            },
-            writeType: (type, enclosingDeclaration, flags, writer) => {
-                return typeToString(type, getParseTreeNode(enclosingDeclaration), flags, writer);
-            },
-            writeSymbol: (symbol, enclosingDeclaration, meaning, flags, writer) => {
-                return symbolToString(symbol, getParseTreeNode(enclosingDeclaration), meaning, flags, writer);
-            },
-            writeTypePredicate: (predicate, enclosingDeclaration, flags, writer) => {
-                return typePredicateToString(predicate, getParseTreeNode(enclosingDeclaration), flags, writer);
-            },
-            getAugmentedPropertiesOfType,
-            getRootSymbols,
-            getContextualType: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isExpression);
-                return node ? getContextualType(node) : undefined;
-            },
-            getContextualTypeForArgumentAtIndex: (nodeIn, argIndex) => {
-                const node = getParseTreeNode(nodeIn, isCallLikeExpression);
-                return node && getContextualTypeForArgumentAtIndex(node, argIndex);
-            },
-            getContextualTypeForJsxAttribute: (nodeIn) => {
-                const node = getParseTreeNode(nodeIn, isJsxAttributeLike);
-                return node && getContextualTypeForJsxAttribute(node);
-            },
-            isContextSensitive,
-            getFullyQualifiedName,
-            getResolvedSignature: (nodeIn, candidatesOutArray, theArgumentCount) => {
-                const node = getParseTreeNode(nodeIn, isCallLikeExpression);
-                apparentArgumentCount = theArgumentCount;
-                const res = node ? getResolvedSignature(node, candidatesOutArray) : undefined;
-                apparentArgumentCount = undefined;
-                return res;
-            },
-            getConstantValue: nodeIn => {
-                const node = getParseTreeNode(nodeIn, canHaveConstantValue);
-                return node ? getConstantValue(node) : undefined;
-            },
-            isValidPropertyAccess: (nodeIn, propertyName) => {
-                const node = getParseTreeNode(nodeIn, isPropertyAccessOrQualifiedNameOrImportTypeNode);
-                return !!node && isValidPropertyAccess(node, escapeLeadingUnderscores(propertyName));
-            },
-            isValidPropertyAccessForCompletions: (nodeIn, type, property) => {
-                const node = getParseTreeNode(nodeIn, isPropertyAccessExpression);
-                return !!node && isValidPropertyAccessForCompletions(node, type, property);
-            },
-            getSignatureFromDeclaration: declarationIn => {
-                const declaration = getParseTreeNode(declarationIn, isFunctionLike);
-                return declaration ? getSignatureFromDeclaration(declaration) : undefined;
-            },
-            isImplementationOfOverload: node => {
-                const parsed = getParseTreeNode(node, isFunctionLike);
-                return parsed ? isImplementationOfOverload(parsed) : undefined;
-            },
-            getImmediateAliasedSymbol: symbol => {
-                Debug.assert((symbol.flags & SymbolFlags.Alias) !== 0, "Should only get Alias here.");
-                const links = getSymbolLinks(symbol);
-                if (!links.immediateTarget) {
-                    const node = getDeclarationOfAliasSymbol(symbol);
-                    if (!node) return Debug.fail();
-                    links.immediateTarget = getTargetOfAliasDeclaration(node, /*dontRecursivelyResolve*/ true);
-                }
-
-                return links.immediateTarget;
-            },
-            getAliasedSymbol: resolveAlias,
-            getEmitResolver,
-            getExportsOfModule: getExportsOfModuleAsArray,
-            getExportsAndPropertiesOfModule,
-            getSymbolWalker: createGetSymbolWalker(
-                getRestTypeOfSignature,
-                getTypePredicateOfSignature,
-                getReturnTypeOfSignature,
-                getBaseTypes,
-                resolveStructuredTypeMembers,
-                getTypeOfSymbol,
-                getResolvedSymbol,
-                getIndexTypeOfStructuredType,
-                getConstraintFromTypeParameter,
-                getFirstIdentifier,
-            ),
-            getAmbientModules,
-            getAllAttributesTypeFromJsxOpeningLikeElement: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isJsxOpeningLikeElement);
-                return node ? getAllAttributesTypeFromJsxOpeningLikeElement(node) : undefined;
-            },
-            getJsxIntrinsicTagNamesAt,
-            isOptionalParameter: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isParameter);
-                return node ? isOptionalParameter(node) : false;
-            },
-            tryGetMemberInModuleExports: (name, symbol) => tryGetMemberInModuleExports(escapeLeadingUnderscores(name), symbol),
-            tryGetMemberInModuleExportsAndProperties: (name, symbol) => tryGetMemberInModuleExportsAndProperties(escapeLeadingUnderscores(name), symbol),
-            tryFindAmbientModuleWithoutAugmentations: moduleName => {
-                // we deliberately exclude augmentations
-                // since we are only interested in declarations of the module itself
-                return tryFindAmbientModule(moduleName, /*withAugmentations*/ false);
-            },
-            getApparentType,
-            getUnionType,
-            createAnonymousType,
-            createSignature,
-            createSymbol,
-            createIndexInfo,
-            getAnyType: () => anyType,
-            getStringType: () => stringType,
-            getNumberType: () => numberType,
-            createPromiseType,
-            createArrayType,
-            getBooleanType: () => booleanType,
-            getFalseType: () => falseType,
-            getTrueType: () => trueType,
-            getVoidType: () => voidType,
-            getUndefinedType: () => undefinedType,
-            getNullType: () => nullType,
-            getESSymbolType: () => esSymbolType,
-            getNeverType: () => neverType,
-            isSymbolAccessible,
-            isArrayLikeType,
-            isTypeInvalidDueToUnionDiscriminant,
-            getAllPossiblePropertiesOfTypes,
-            getSuggestionForNonexistentProperty: (node, type) => getSuggestionForNonexistentProperty(node, type),
-            getSuggestionForNonexistentSymbol: (location, name, meaning) => getSuggestionForNonexistentSymbol(location, escapeLeadingUnderscores(name), meaning),
-            getSuggestionForNonexistentModule: (node, target) => getSuggestionForNonexistentModule(node, target),
-            getBaseConstraintOfType,
-            getDefaultFromTypeParameter: type => type && type.flags & TypeFlags.TypeParameter ? getDefaultFromTypeParameter(type as TypeParameter) : undefined,
-            resolveName(name, location, meaning, excludeGlobals) {
-                return resolveName(location, escapeLeadingUnderscores(name), meaning, /*nameNotFoundMessage*/ undefined, /*nameArg*/ undefined, /*isUse*/ false, excludeGlobals);
-            },
-            getJsxNamespace: n => unescapeLeadingUnderscores(getJsxNamespace(n)),
-            getAccessibleSymbolChain,
-            getTypePredicateOfSignature: getTypePredicateOfSignature as (signature: Signature) => TypePredicate, // TODO: GH#18217
-            resolveExternalModuleSymbol,
-            tryGetThisTypeAt: node => {
-                node = getParseTreeNode(node);
-                return node && tryGetThisTypeAt(node);
-            },
-            getTypeArgumentConstraint: nodeIn => {
-                const node = getParseTreeNode(nodeIn, isTypeNode);
-                return node && getTypeArgumentConstraint(node);
-            },
-            getSuggestionDiagnostics: (file, ct) => {
-                let diagnostics: DiagnosticWithLocation[] | undefined;
-                try {
-                    // Record the cancellation token so it can be checked later on during checkSourceElement.
-                    // Do this in a finally block so we can ensure that it gets reset back to nothing after
-                    // this call is done.
-                    cancellationToken = ct;
-
-                    // Ensure file is type checked
-                    checkSourceFile(file);
-                    Debug.assert(!!(getNodeLinks(file).flags & NodeCheckFlags.TypeChecked));
-
-                    diagnostics = addRange(diagnostics, suggestionDiagnostics.get(file.fileName));
-                    if (!file.isDeclarationFile && (!unusedIsError(UnusedKind.Local) || !unusedIsError(UnusedKind.Parameter))) {
-                        addUnusedDiagnostics();
-                    }
-                    return diagnostics || emptyArray;
-                }
-                finally {
-                    cancellationToken = undefined;
-                }
-
-                function addUnusedDiagnostics() {
-                    checkUnusedIdentifiers(getPotentiallyUnusedIdentifiers(file), (kind, diag) => {
-                        if (!unusedIsError(kind)) {
-                            (diagnostics || (diagnostics = [])).push({ ...diag, category: DiagnosticCategory.Suggestion });
-                        }
-                    });
-                }
-            },
-
-            runWithCancellationToken: (token, callback) => {
-                try {
-                    cancellationToken = token;
-                    return callback(checker);
-                }
-                finally {
-                    cancellationToken = undefined;
-                }
-            }
-        };
 
         const tupleTypes = createMap<GenericType>();
         const unionTypes = createMap<UnionType>();
@@ -654,8 +425,6 @@ namespace ts {
         const isNotOverloadAndNotAccessor = and(isNotOverload, isNotAccessor);
 
         initializeTypeChecker();
-
-        return checker;
 
         function getJsxNamespace(location: Node | undefined): __String {
             if (location) {
@@ -6745,12 +6514,12 @@ namespace ts {
             return arrayFrom(props.values());
         }
 
-        function getConstraintOfType(type: InstantiableType | UnionOrIntersectionType): Type | undefined {
+        const getConstraintOfType = wrapLog(function getConstraintOfType(type: InstantiableType | UnionOrIntersectionType): Type | undefined {
             return type.flags & TypeFlags.TypeParameter ? getConstraintOfTypeParameter(<TypeParameter>type) :
                 type.flags & TypeFlags.IndexedAccess ? getConstraintOfIndexedAccess(<IndexedAccessType>type) :
                 type.flags & TypeFlags.Conditional ? getConstraintOfConditionalType(<ConditionalType>type) :
                 getBaseConstraintOfType(type);
-        }
+        });
 
         function getConstraintOfTypeParameter(typeParameter: TypeParameter): Type | undefined {
             return hasNonCircularBaseConstraint(typeParameter) ? getConstraintFromTypeParameter(typeParameter) : undefined;
@@ -6772,24 +6541,26 @@ namespace ts {
             return type.resolvedDefaultConstraint;
         }
 
-        function getConstraintOfDistributiveConditionalType(type: ConditionalType): Type | undefined {
+        const getConstraintOfDistributiveConditionalType = wrapLog(function getConstraintOfDistributiveConditionalType(type: ConditionalType): Type | undefined {
             // Check if we have a conditional type of the form 'T extends U ? X : Y', where T is a constrained
             // type parameter. If so, create an instantiation of the conditional type where T is replaced
             // with its constraint. We do this because if the constraint is a union type it will be distributed
             // over the conditional type and possibly reduced. For example, 'T extends undefined ? never : T'
             // removes 'undefined' from T.
             if (type.root.isDistributive) {
+                log(`ConditionalType ${typeToString(type)} isDistributive`);
                 const constraint = getConstraintOfType(getSimplifiedType(type.checkType));
                 if (constraint) {
                     const mapper = makeUnaryTypeMapper(type.root.checkType, constraint);
                     const instantiated = getConditionalTypeInstantiation(type, combineTypeMappers(mapper, type.mapper));
                     if (!(instantiated.flags & TypeFlags.Never)) {
+                        log(`getConditionalTypeInstantiation(${typeToString(type)}, combineTypeMappers(makeUnaryTypeMapper(${typeToString(type.root.checkType)}, ${typeToString(constraint)}), type.mapper)) = ${typeToString(instantiated)}`);
                         return instantiated;
                     }
                 }
             }
             return undefined;
-        }
+        });
 
         function getConstraintOfConditionalType(type: ConditionalType) {
             return getConstraintOfDistributiveConditionalType(type) || getDefaultConstraintOfConditionalType(type);
@@ -6845,14 +6616,6 @@ namespace ts {
             }
         }
 
-        function getBaseConstraintOfType(type: Type): Type | undefined {
-            const constraint = getBaseConstraintOfInstantiableNonPrimitiveUnionOrIntersection(type);
-            if (!constraint && type.flags & TypeFlags.Index) {
-                return keyofConstraintType;
-            }
-            return constraint;
-        }
-
         /**
          * This is similar to `getBaseConstraintOfType` except it returns the input type if there's no base constraint, instead of `undefined`
          * It also doesn't map indexes to `string`, as where this is used this would be unneeded (and likely undesirable)
@@ -6865,20 +6628,23 @@ namespace ts {
             return getResolvedBaseConstraint(type) !== circularConstraintType;
         }
 
+        const getBaseConstraintOfType = wrapLog(function getBaseConstraintOfType(type: Type): Type | undefined {
+            const constraint = getBaseConstraintOfInstantiableNonPrimitiveUnionOrIntersection(type);
+            if (!constraint && type.flags & TypeFlags.Index) {
+                log(`(path 1)`);
+                return keyofConstraintType;
+            }
+            log(`(path 2)`);
+            return constraint;
+        });
+
         /**
          * Return the resolved base constraint of a type variable. The noConstraintType singleton is returned if the
          * type variable has no constraint, and the circularConstraintType singleton is returned if the constraint
          * circularly references the type variable.
          */
-        function getResolvedBaseConstraint(type: InstantiableType | UnionOrIntersectionType): Type {
-            let circular: boolean | undefined;
-            if (!type.resolvedBaseConstraint) {
-                const constraint = getBaseConstraint(type);
-                type.resolvedBaseConstraint = circular ? circularConstraintType : getTypeWithThisArgument(constraint || noConstraintType, type);
-            }
-            return type.resolvedBaseConstraint;
-
-            function getBaseConstraint(t: Type): Type | undefined {
+        const getResolvedBaseConstraint = wrapLog(function getResolvedBaseConstraint(type: InstantiableType | UnionOrIntersectionType): Type {
+            const getBaseConstraint = wrapLog(function getBaseConstraint(t: Type): Type | undefined {
                 if (t.immediateBaseConstraint) {
                     return t.immediateBaseConstraint === noConstraintType ? undefined : t.immediateBaseConstraint;
                 }
@@ -6888,6 +6654,7 @@ namespace ts {
                     return undefined;
                 }
                 const result = computeBaseConstraint(getSimplifiedType(t));
+                log(`computeBaseConstraint(${typeToString(getSimplifiedType(t))}) = ${result && typeToString(result)}`);
                 if (!popTypeResolution()) {
                     circular = true;
                     t.immediateBaseConstraint = circularConstraintType;
@@ -6895,20 +6662,27 @@ namespace ts {
                 }
                 t.immediateBaseConstraint = !result ? noConstraintType : result;
                 return result;
-            }
+            });
 
-            function computeBaseConstraint(t: Type): Type | undefined {
+            const computeBaseConstraint = wrapLog(function computeBaseConstraint(t: Type): Type | undefined {
                 if (t.flags & TypeFlags.TypeParameter) {
                     const constraint = getConstraintFromTypeParameter(<TypeParameter>t);
                     return (t as TypeParameter).isThisType || !constraint ?
                         constraint :
                         getBaseConstraint(constraint);
                 }
+                const UNIA = TypeFlags.Union;
+                const INTERSECTIA = TypeFlags.Intersection;
                 if (t.flags & TypeFlags.UnionOrIntersection) {
+                    if (typeToString(t) === "any[] & T") {
+                        log(UNIA + " " + INTERSECTIA);
+                        debugger;
+                    }
                     const types = (<UnionOrIntersectionType>t).types;
                     const baseTypes: Type[] = [];
                     for (const type of types) {
                         const baseType = getBaseConstraint(type);
+                        log(`getBaseConstraint(${typeToString(type)}) = ${baseType && typeToString(baseType)}`);
                         if (baseType) {
                             baseTypes.push(baseType);
                         }
@@ -6937,8 +6711,15 @@ namespace ts {
                     return emptyObjectType;
                 }
                 return t;
+            });
+
+            let circular: boolean | undefined;
+            if (!type.resolvedBaseConstraint) {
+                const constraint = getBaseConstraint(type);
+                type.resolvedBaseConstraint = circular ? circularConstraintType : getTypeWithThisArgument(constraint || noConstraintType, type);
             }
-        }
+            return type.resolvedBaseConstraint;
+        });
 
         function getApparentTypeOfIntersectionType(type: IntersectionType) {
             return type.resolvedApparentType || (type.resolvedApparentType = getTypeWithThisArgument(type, type, /*apparentType*/ true));
@@ -10635,6 +10416,10 @@ namespace ts {
             return getObjectFlags(source) & ObjectFlags.JsxAttributes && !(isUnhyphenatedJsxName(sourceProp.escapedName) || targetMemberType);
         }
 
+        const wrapCheckTypeRelatedTo = wrapLogCustom(
+            (source: Type, target: Type, ..._rest: any[]) => `${typeToString(source)}, ${typeToString(target)}`,
+            (ret: boolean) => ret ? "true" : "false"
+        );
         /**
          * Checks if 'source' is related to 'target' (e.g.: is a assignable to).
          * @param source The left-hand-side of the relation.
@@ -10645,7 +10430,7 @@ namespace ts {
          * @param headMessage If the error chain should be prepended by a head message, then headMessage will be used.
          * @param containingMessageChain A chain of errors to prepend any new errors found.
          */
-        function checkTypeRelatedTo(
+        const checkTypeRelatedTo = wrapCheckTypeRelatedTo(function checkTypeRelatedTo(
             source: Type,
             target: Type,
             relation: Map<RelationComparisonResult>,
@@ -10666,40 +10451,6 @@ namespace ts {
             let isIntersectionConstituent = false;
 
             Debug.assert(relation !== identityRelation || !errorNode, "no error reporting in identity checking");
-
-            const result = isRelatedTo(source, target, /*reportErrors*/ !!errorNode, headMessage);
-            if (overflow) {
-                error(errorNode, Diagnostics.Excessive_stack_depth_comparing_types_0_and_1, typeToString(source), typeToString(target));
-            }
-            else if (errorInfo) {
-                if (containingMessageChain) {
-                    const chain = containingMessageChain();
-                    if (chain) {
-                        errorInfo = concatenateDiagnosticMessageChains(chain, errorInfo);
-                    }
-                }
-
-                let relatedInformation: DiagnosticRelatedInformation[] | undefined;
-                // Check if we should issue an extra diagnostic to produce a quickfix for a slightly incorrect import statement
-                if (headMessage && errorNode && !result && source.symbol) {
-                    const links = getSymbolLinks(source.symbol);
-                    if (links.originatingImport && !isImportCall(links.originatingImport)) {
-                        const helpfulRetry = checkTypeRelatedTo(getTypeOfSymbol(links.target!), target, relation, /*errorNode*/ undefined);
-                        if (helpfulRetry) {
-                            // Likely an incorrect import. Issue a helpful diagnostic to produce a quickfix to change the import
-                            const diag = createDiagnosticForNode(links.originatingImport, Diagnostics.Type_originates_at_this_import_A_namespace_style_import_cannot_be_called_or_constructed_and_will_cause_a_failure_at_runtime_Consider_using_a_default_import_or_import_require_here_instead);
-                            relatedInformation = append(relatedInformation, diag); // Cause the error to appear with the error that triggered it
-                        }
-                    }
-                }
-
-                const diag = createDiagnosticForNodeFromMessageChain(errorNode!, errorInfo, relatedInformation);
-                if (errorOutputContainer) {
-                    errorOutputContainer.error = diag;
-                }
-                diagnostics.add(diag); // TODO: GH#18217
-            }
-            return result !== Ternary.False;
 
             function reportError(message: DiagnosticMessage, arg0?: string, arg1?: string, arg2?: string): void {
                 Debug.assert(!!errorNode);
@@ -10760,13 +10511,37 @@ namespace ts {
                 return false;
             }
 
+            const wrapIsRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, ..._rest: any[]) => `${typeToString(source)},${typeToString(target)}`,
+                ternaryToString
+            );
             /**
              * Compare two types and return
              * * Ternary.True if they are related with no assumptions,
              * * Ternary.Maybe if they are related with assumptions of other relationships, or
              * * Ternary.False if they are not related.
              */
+            const isRelatedTo = wrapIsRelatedTo(
             function isRelatedTo(source: Type, target: Type, reportErrors = false, headMessage?: DiagnosticMessage): Ternary {
+                const relationType =
+                        relation === assignableRelation
+                            ? "assignable"
+                        : relation === identityRelation
+                            ? "identical"
+                        : relation === comparableRelation
+                            ? "comparable"
+                        : relation === definitelyAssignableRelation
+                            ? "definitely assignable"
+                        : relation === subtypeRelation
+                            ? "subtype"
+                        : relation === enumRelation
+                            ? "enum"
+                        : "unknown relation";
+                log(relationType + ": " + typeToString(source) + " -> " + typeToString(target));
+                if (typeToString(source) === "...here goes your type...") {
+                    debugger;
+                }
+
                 if (source.flags & TypeFlags.StringOrNumberLiteral && source.flags & TypeFlags.FreshLiteral) {
                     source = (<LiteralType>source).regularType;
                 }
@@ -10935,7 +10710,7 @@ namespace ts {
                     reportRelationError(headMessage, source, target);
                 }
                 return result;
-            }
+            });
 
             function isIdenticalTo(source: Type, target: Type): Ternary {
                 let result: Ternary;
@@ -11277,7 +11052,11 @@ namespace ts {
                 return relation === definitelyAssignableRelation ? undefined : getConstraintOfType(type);
             }
 
-            function structuredTypeRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
+            const wrapStructuredTypeRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, reportErrors: boolean) => `${typeToString(source)},${typeToString(target)},${reportErrors}`,
+                ternaryToString
+            );
+            const structuredTypeRelatedTo = wrapStructuredTypeRelatedTo(function structuredTypeRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
                 let result: Ternary;
                 let originalErrorInfo: DiagnosticMessageChain | undefined;
                 const saveErrorInfo = errorInfo;
@@ -11395,13 +11174,19 @@ namespace ts {
                     }
                     else if (relation !== definitelyAssignableRelation) {
                         const distributiveConstraint = getConstraintOfDistributiveConditionalType(<ConditionalType>source);
+                        const defaultConstraint = getDefaultConstraintOfConditionalType(<ConditionalType>source);
+
+                        log("distributive constraint of", typeToString(source), "is", distributiveConstraint && typeToString(distributiveConstraint));
+                        log("default constraint of", typeToString(source), "is", defaultConstraint && typeToString(defaultConstraint));
+
                         if (distributiveConstraint) {
+                            log("distributive constraint of", typeToString(source), "is", typeToString(distributiveConstraint));
                             if (result = isRelatedTo(distributiveConstraint, target, reportErrors)) {
                                 errorInfo = saveErrorInfo;
                                 return result;
                             }
                         }
-                        const defaultConstraint = getDefaultConstraintOfConditionalType(<ConditionalType>source);
+
                         if (defaultConstraint) {
                             if (result = isRelatedTo(defaultConstraint, target, reportErrors)) {
                                 errorInfo = saveErrorInfo;
@@ -11488,7 +11273,7 @@ namespace ts {
                     }
                 }
                 return Ternary.False;
-            }
+            })
 
             // A type [P in S]: X is related to a type [Q in T]: Y if T is related to S and X' is
             // related to Y, where X' is an instantiation of X in which P is replaced with Q. Notice
@@ -11506,7 +11291,11 @@ namespace ts {
                 return Ternary.False;
             }
 
-            function propertiesRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
+            const wrapPropertiesRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, reportErrors: boolean) => `${typeToString(source)},${typeToString(target)},${reportErrors}`,
+                ternaryToString
+            );
+            const propertiesRelatedTo = wrapPropertiesRelatedTo(function propertiesRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
                 if (relation === identityRelation) {
                     return propertiesIdenticalTo(source, target);
                 }
@@ -11634,7 +11423,7 @@ namespace ts {
                     }
                 }
                 return result;
-            }
+            });
 
             /**
              * A type is 'weak' if it is an object type with at least one optional property
@@ -11900,7 +11689,41 @@ namespace ts {
 
                 return false;
             }
-        }
+
+            const result = isRelatedTo(source, target, /*reportErrors*/ !!errorNode, headMessage);
+            if (overflow) {
+                error(errorNode, Diagnostics.Excessive_stack_depth_comparing_types_0_and_1, typeToString(source), typeToString(target));
+            }
+            else if (errorInfo) {
+                if (containingMessageChain) {
+                    const chain = containingMessageChain();
+                    if (chain) {
+                        errorInfo = concatenateDiagnosticMessageChains(chain, errorInfo);
+                    }
+                }
+
+                let relatedInformation: DiagnosticRelatedInformation[] | undefined;
+                // Check if we should issue an extra diagnostic to produce a quickfix for a slightly incorrect import statement
+                if (headMessage && errorNode && !result && source.symbol) {
+                    const links = getSymbolLinks(source.symbol);
+                    if (links.originatingImport && !isImportCall(links.originatingImport)) {
+                        const helpfulRetry = checkTypeRelatedTo(getTypeOfSymbol(links.target!), target, relation, /*errorNode*/ undefined);
+                        if (helpfulRetry) {
+                            // Likely an incorrect import. Issue a helpful diagnostic to produce a quickfix to change the import
+                            const diag = createDiagnosticForNode(links.originatingImport, Diagnostics.Type_originates_at_this_import_A_namespace_style_import_cannot_be_called_or_constructed_and_will_cause_a_failure_at_runtime_Consider_using_a_default_import_or_import_require_here_instead);
+                            relatedInformation = append(relatedInformation, diag); // Cause the error to appear with the error that triggered it
+                        }
+                    }
+                }
+
+                const diag = createDiagnosticForNodeFromMessageChain(errorNode!, errorInfo, relatedInformation);
+                if (errorOutputContainer) {
+                    errorOutputContainer.error = diag;
+                }
+                diagnostics.add(diag); // TODO: GH#18217
+            }
+            return result !== Ternary.False;
+        });
 
         // Return a type reference where the source type parameter is replaced with the target marker
         // type, and flag the result as a marker type reference.
@@ -29235,6 +29058,282 @@ namespace ts {
             }
             return false;
         }
+
+        // for public members that accept a Node or one of its subtypes, we must guard against
+        // synthetic nodes created during transformations by calling `getParseTreeNode`.
+        // for most of these, we perform the guard only on `checker` to avoid any possible
+        // extra cost of calling `getParseTreeNode` when calling these functions from inside the
+        // checker.
+        const checker: TypeChecker = {
+            getNodeCount: () => sum(host.getSourceFiles(), "nodeCount"),
+            getIdentifierCount: () => sum(host.getSourceFiles(), "identifierCount"),
+            getSymbolCount: () => sum(host.getSourceFiles(), "symbolCount") + symbolCount,
+            getTypeCount: () => typeCount,
+            isUndefinedSymbol: symbol => symbol === undefinedSymbol,
+            isArgumentsSymbol: symbol => symbol === argumentsSymbol,
+            isUnknownSymbol: symbol => symbol === unknownSymbol,
+            getMergedSymbol,
+            getDiagnostics,
+            getGlobalDiagnostics,
+            getTypeOfSymbolAtLocation: (symbol, location) => {
+                location = getParseTreeNode(location);
+                return location ? getTypeOfSymbolAtLocation(symbol, location) : errorType;
+            },
+            getSymbolsOfParameterPropertyDeclaration: (parameterIn, parameterName) => {
+                const parameter = getParseTreeNode(parameterIn, isParameter);
+                if (parameter === undefined) return Debug.fail("Cannot get symbols of a synthetic parameter that cannot be resolved to a parse-tree node.");
+                return getSymbolsOfParameterPropertyDeclaration(parameter, escapeLeadingUnderscores(parameterName));
+            },
+            getDeclaredTypeOfSymbol,
+            getPropertiesOfType,
+            getPropertyOfType: (type, name) => getPropertyOfType(type, escapeLeadingUnderscores(name)),
+            getTypeOfPropertyOfType: (type, name) => getTypeOfPropertyOfType(type, escapeLeadingUnderscores(name)),
+            getIndexInfoOfType,
+            getSignaturesOfType,
+            getIndexTypeOfType,
+            getBaseTypes,
+            getBaseTypeOfLiteralType,
+            getWidenedType,
+            getTypeFromTypeNode: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isTypeNode);
+                return node ? getTypeFromTypeNode(node) : errorType;
+            },
+            getParameterType: getTypeAtPosition,
+            getReturnTypeOfSignature,
+            getNullableType,
+            getNonNullableType,
+            typeToTypeNode: nodeBuilder.typeToTypeNode,
+            indexInfoToIndexSignatureDeclaration: nodeBuilder.indexInfoToIndexSignatureDeclaration,
+            signatureToSignatureDeclaration: nodeBuilder.signatureToSignatureDeclaration,
+            symbolToEntityName: nodeBuilder.symbolToEntityName as (symbol: Symbol, meaning: SymbolFlags, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => EntityName, // TODO: GH#18217
+            symbolToExpression: nodeBuilder.symbolToExpression as (symbol: Symbol, meaning: SymbolFlags, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => Expression, // TODO: GH#18217
+            symbolToTypeParameterDeclarations: nodeBuilder.symbolToTypeParameterDeclarations,
+            symbolToParameterDeclaration: nodeBuilder.symbolToParameterDeclaration as (symbol: Symbol, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => ParameterDeclaration, // TODO: GH#18217
+            typeParameterToDeclaration: nodeBuilder.typeParameterToDeclaration as (parameter: TypeParameter, enclosingDeclaration?: Node, flags?: NodeBuilderFlags) => TypeParameterDeclaration, // TODO: GH#18217
+            getSymbolsInScope: (location, meaning) => {
+                location = getParseTreeNode(location);
+                return location ? getSymbolsInScope(location, meaning) : [];
+            },
+            getSymbolAtLocation: node => {
+                node = getParseTreeNode(node);
+                return node ? getSymbolAtLocation(node) : undefined;
+            },
+            getShorthandAssignmentValueSymbol: node => {
+                node = getParseTreeNode(node);
+                return node ? getShorthandAssignmentValueSymbol(node) : undefined;
+            },
+            getExportSpecifierLocalTargetSymbol: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isExportSpecifier);
+                return node ? getExportSpecifierLocalTargetSymbol(node) : undefined;
+            },
+            getExportSymbolOfSymbol(symbol) {
+                return getMergedSymbol(symbol.exportSymbol || symbol);
+            },
+            getTypeAtLocation: node => {
+                node = getParseTreeNode(node);
+                return node ? getTypeOfNode(node) : errorType;
+            },
+            getPropertySymbolOfDestructuringAssignment: locationIn => {
+                const location = getParseTreeNode(locationIn, isIdentifier);
+                return location ? getPropertySymbolOfDestructuringAssignment(location) : undefined;
+            },
+            signatureToString: (signature, enclosingDeclaration, flags, kind) => {
+                return signatureToString(signature, getParseTreeNode(enclosingDeclaration), flags, kind);
+            },
+            typeToString: (type, enclosingDeclaration, flags) => {
+                return typeToString(type, getParseTreeNode(enclosingDeclaration), flags);
+            },
+            symbolToString: (symbol, enclosingDeclaration, meaning, flags) => {
+                return symbolToString(symbol, getParseTreeNode(enclosingDeclaration), meaning, flags);
+            },
+            typePredicateToString: (predicate, enclosingDeclaration, flags) => {
+                return typePredicateToString(predicate, getParseTreeNode(enclosingDeclaration), flags);
+            },
+            writeSignature: (signature, enclosingDeclaration, flags, kind, writer) => {
+                return signatureToString(signature, getParseTreeNode(enclosingDeclaration), flags, kind, writer);
+            },
+            writeType: (type, enclosingDeclaration, flags, writer) => {
+                return typeToString(type, getParseTreeNode(enclosingDeclaration), flags, writer);
+            },
+            writeSymbol: (symbol, enclosingDeclaration, meaning, flags, writer) => {
+                return symbolToString(symbol, getParseTreeNode(enclosingDeclaration), meaning, flags, writer);
+            },
+            writeTypePredicate: (predicate, enclosingDeclaration, flags, writer) => {
+                return typePredicateToString(predicate, getParseTreeNode(enclosingDeclaration), flags, writer);
+            },
+            getAugmentedPropertiesOfType,
+            getRootSymbols,
+            getContextualType: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isExpression);
+                return node ? getContextualType(node) : undefined;
+            },
+            getContextualTypeForArgumentAtIndex: (nodeIn, argIndex) => {
+                const node = getParseTreeNode(nodeIn, isCallLikeExpression);
+                return node && getContextualTypeForArgumentAtIndex(node, argIndex);
+            },
+            getContextualTypeForJsxAttribute: (nodeIn) => {
+                const node = getParseTreeNode(nodeIn, isJsxAttributeLike);
+                return node && getContextualTypeForJsxAttribute(node);
+            },
+            isContextSensitive,
+            getFullyQualifiedName,
+            getResolvedSignature: (nodeIn, candidatesOutArray, theArgumentCount) => {
+                const node = getParseTreeNode(nodeIn, isCallLikeExpression);
+                apparentArgumentCount = theArgumentCount;
+                const res = node ? getResolvedSignature(node, candidatesOutArray) : undefined;
+                apparentArgumentCount = undefined;
+                return res;
+            },
+            getConstantValue: nodeIn => {
+                const node = getParseTreeNode(nodeIn, canHaveConstantValue);
+                return node ? getConstantValue(node) : undefined;
+            },
+            isValidPropertyAccess: (nodeIn, propertyName) => {
+                const node = getParseTreeNode(nodeIn, isPropertyAccessOrQualifiedNameOrImportTypeNode);
+                return !!node && isValidPropertyAccess(node, escapeLeadingUnderscores(propertyName));
+            },
+            isValidPropertyAccessForCompletions: (nodeIn, type, property) => {
+                const node = getParseTreeNode(nodeIn, isPropertyAccessExpression);
+                return !!node && isValidPropertyAccessForCompletions(node, type, property);
+            },
+            getSignatureFromDeclaration: declarationIn => {
+                const declaration = getParseTreeNode(declarationIn, isFunctionLike);
+                return declaration ? getSignatureFromDeclaration(declaration) : undefined;
+            },
+            isImplementationOfOverload: node => {
+                const parsed = getParseTreeNode(node, isFunctionLike);
+                return parsed ? isImplementationOfOverload(parsed) : undefined;
+            },
+            getImmediateAliasedSymbol: symbol => {
+                Debug.assert((symbol.flags & SymbolFlags.Alias) !== 0, "Should only get Alias here.");
+                const links = getSymbolLinks(symbol);
+                if (!links.immediateTarget) {
+                    const node = getDeclarationOfAliasSymbol(symbol);
+                    if (!node) return Debug.fail();
+                    links.immediateTarget = getTargetOfAliasDeclaration(node, /*dontRecursivelyResolve*/ true);
+                }
+
+                return links.immediateTarget;
+            },
+            getAliasedSymbol: resolveAlias,
+            getEmitResolver,
+            getExportsOfModule: getExportsOfModuleAsArray,
+            getExportsAndPropertiesOfModule,
+            getSymbolWalker: createGetSymbolWalker(
+                getRestTypeOfSignature,
+                getTypePredicateOfSignature,
+                getReturnTypeOfSignature,
+                getBaseTypes,
+                resolveStructuredTypeMembers,
+                getTypeOfSymbol,
+                getResolvedSymbol,
+                getIndexTypeOfStructuredType,
+                getConstraintFromTypeParameter,
+                getFirstIdentifier,
+            ),
+            getAmbientModules,
+            getAllAttributesTypeFromJsxOpeningLikeElement: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isJsxOpeningLikeElement);
+                return node ? getAllAttributesTypeFromJsxOpeningLikeElement(node) : undefined;
+            },
+            getJsxIntrinsicTagNamesAt,
+            isOptionalParameter: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isParameter);
+                return node ? isOptionalParameter(node) : false;
+            },
+            tryGetMemberInModuleExports: (name, symbol) => tryGetMemberInModuleExports(escapeLeadingUnderscores(name), symbol),
+            tryGetMemberInModuleExportsAndProperties: (name, symbol) => tryGetMemberInModuleExportsAndProperties(escapeLeadingUnderscores(name), symbol),
+            tryFindAmbientModuleWithoutAugmentations: moduleName => {
+                // we deliberately exclude augmentations
+                // since we are only interested in declarations of the module itself
+                return tryFindAmbientModule(moduleName, /*withAugmentations*/ false);
+            },
+            getApparentType,
+            getUnionType,
+            createAnonymousType,
+            createSignature,
+            createSymbol,
+            createIndexInfo,
+            getAnyType: () => anyType,
+            getStringType: () => stringType,
+            getNumberType: () => numberType,
+            createPromiseType,
+            createArrayType,
+            getBooleanType: () => booleanType,
+            getFalseType: () => falseType,
+            getTrueType: () => trueType,
+            getVoidType: () => voidType,
+            getUndefinedType: () => undefinedType,
+            getNullType: () => nullType,
+            getESSymbolType: () => esSymbolType,
+            getNeverType: () => neverType,
+            isSymbolAccessible,
+            isArrayLikeType,
+            isTypeInvalidDueToUnionDiscriminant,
+            getAllPossiblePropertiesOfTypes,
+            getSuggestionForNonexistentProperty: (node, type) => getSuggestionForNonexistentProperty(node, type),
+            getSuggestionForNonexistentSymbol: (location, name, meaning) => getSuggestionForNonexistentSymbol(location, escapeLeadingUnderscores(name), meaning),
+            getSuggestionForNonexistentModule: (node, target) => getSuggestionForNonexistentModule(node, target),
+            getBaseConstraintOfType,
+            getDefaultFromTypeParameter: type => type && type.flags & TypeFlags.TypeParameter ? getDefaultFromTypeParameter(type as TypeParameter) : undefined,
+            resolveName(name, location, meaning, excludeGlobals) {
+                return resolveName(location, escapeLeadingUnderscores(name), meaning, /*nameNotFoundMessage*/ undefined, /*nameArg*/ undefined, /*isUse*/ false, excludeGlobals);
+            },
+            getJsxNamespace: n => unescapeLeadingUnderscores(getJsxNamespace(n)),
+            getAccessibleSymbolChain,
+            getTypePredicateOfSignature: getTypePredicateOfSignature as (signature: Signature) => TypePredicate, // TODO: GH#18217
+            resolveExternalModuleSymbol,
+            tryGetThisTypeAt: node => {
+                node = getParseTreeNode(node);
+                return node && tryGetThisTypeAt(node);
+            },
+            getTypeArgumentConstraint: nodeIn => {
+                const node = getParseTreeNode(nodeIn, isTypeNode);
+                return node && getTypeArgumentConstraint(node);
+            },
+            getSuggestionDiagnostics: (file, ct) => {
+                let diagnostics: DiagnosticWithLocation[] | undefined;
+                try {
+                    // Record the cancellation token so it can be checked later on during checkSourceElement.
+                    // Do this in a finally block so we can ensure that it gets reset back to nothing after
+                    // this call is done.
+                    cancellationToken = ct;
+
+                    // Ensure file is type checked
+                    checkSourceFile(file);
+                    Debug.assert(!!(getNodeLinks(file).flags & NodeCheckFlags.TypeChecked));
+
+                    diagnostics = addRange(diagnostics, suggestionDiagnostics.get(file.fileName));
+                    if (!file.isDeclarationFile && (!unusedIsError(UnusedKind.Local) || !unusedIsError(UnusedKind.Parameter))) {
+                        addUnusedDiagnostics();
+                    }
+                    return diagnostics || emptyArray;
+                }
+                finally {
+                    cancellationToken = undefined;
+                }
+
+                function addUnusedDiagnostics() {
+                    checkUnusedIdentifiers(getPotentiallyUnusedIdentifiers(file), (kind, diag) => {
+                        if (!unusedIsError(kind)) {
+                            (diagnostics || (diagnostics = [])).push({ ...diag, category: DiagnosticCategory.Suggestion });
+                        }
+                    });
+                }
+            },
+
+            runWithCancellationToken: (token, callback) => {
+                try {
+                    cancellationToken = token;
+                    return callback(checker);
+                }
+                finally {
+                    cancellationToken = undefined;
+                }
+            }
+        };
+
+        return checker;
     }
 
     /** Like 'isDeclarationName', but returns true for LHS of `import { x as y }` or `export { x as y }`. */
