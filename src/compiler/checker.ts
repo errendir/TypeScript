@@ -6913,8 +6913,11 @@ namespace ts {
                             baseTypes.push(baseType);
                         }
                     }
-                    return t.flags & TypeFlags.Union && baseTypes.length === types.length ? getUnionType(baseTypes) :
-                        t.flags & TypeFlags.Intersection && baseTypes.length ? getIntersectionType(baseTypes) :
+                    if (baseTypes.length !== types.length) {
+                        return undefined;
+                    }
+                    return t.flags & TypeFlags.Union ? getUnionType(baseTypes) :
+                        t.flags & TypeFlags.Intersection ? getIntersectionType(baseTypes) :
                             undefined;
                 }
                 if (t.flags & TypeFlags.Index) {
