@@ -2,6 +2,8 @@
 /// <reference path="binder.ts"/>
 /// <reference path="symbolWalker.ts" />
 
+declare var console: any;
+
 /* @internal */
 namespace ts {
     const ambientModuleSymbolRegex = /^".+"$/;
@@ -9508,6 +9510,16 @@ namespace ts {
             let overflow = false;
             let isIntersectionConstituent = false;
 
+            interface Relation {
+                source: Type,
+                target: Type,
+                reportErrors: boolean
+            }
+
+            let currentLevelRelations: any[] = [];
+            let nextLevelRelations: any[] = [];
+            let resolveResults: Ternary[] = [];
+
             Debug.assert(relation !== identityRelation || !errorNode, "no error reporting in identity checking");
 
             const result = isRelatedTo(source, target, /*reportErrors*/ !!errorNode, headMessage);
@@ -9703,7 +9715,7 @@ namespace ts {
                         result = someTypeRelatedToType(<IntersectionType>source, target, /*reportErrors*/ false);
                     }
                     if (!result && (source.flags & TypeFlags.StructuredOrInstantiable || target.flags & TypeFlags.StructuredOrInstantiable)) {
-                        if (result = recursiveTypeRelatedTo(source, target, reportErrors)) {
+                        if (result = recursiveTypeRelatedTo([{source, target, reportErrors}])) {
                             errorInfo = saveErrorInfo;
                         }
                     }
@@ -9727,7 +9739,7 @@ namespace ts {
                 let result: Ternary;
                 const flags = source.flags & target.flags;
                 if (flags & TypeFlags.Object) {
-                    return recursiveTypeRelatedTo(source, target, /*reportErrors*/ false);
+                    return recursiveTypeRelatedTo([{source, target, reportErrors: false}]);
                 }
                 if (flags & (TypeFlags.Union | TypeFlags.Intersection)) {
                     if (result = eachTypeRelatedToSomeType(<UnionOrIntersectionType>source, <UnionOrIntersectionType>target)) {
@@ -9974,67 +9986,98 @@ namespace ts {
             // Third, check if both types are part of deeply nested chains of generic type instantiations and if so assume the types are
             // equal and infinitely expanding. Fourth, if we have reached a depth of 100 nested comparisons, assume we have runaway recursion
             // and issue an error. Otherwise, actually compare the structure of the two types.
-            function recursiveTypeRelatedTo(source: Type, target: Type, reportErrors: boolean): Ternary {
-                if (overflow) {
-                    return Ternary.False;
+            function recursiveTypeRelatedTo(relations: Relation[]): Ternary {
+                const resolveId = resolveResults.length;
+                resolveResults.push(Ternary.True);
+                const newRelations = relations
+                    .map(relation => ({ ...relation, resolveId }))
+
+                if(currentLevelRelations.length === 0) {
+                    currentLevelRelations = nextLevelRelations;
+                    currentLevelRelations.push(...newRelations);
+                    nextLevelRelations = [];
+                } else {
+                    nextLevelRelations.push(...newRelations);
                 }
-                const id = getRelationKey(source, target, relation);
-                const related = relation.get(id);
-                if (related !== undefined) {
-                    if (reportErrors && related === RelationComparisonResult.Failed) {
-                        // We are elaborating errors and the cached result is an unreported failure. Record the result as a reported
-                        // failure and continue computing the relation such that errors get reported.
-                        relation.set(id, RelationComparisonResult.FailedAndReported);
+
+                while (currentLevelRelations.length !== 0 || nextLevelRelations.length !== 0) {
+                    if(currentLevelRelations.length === 0) {
+                        currentLevelRelations = nextLevelRelations;
+                        nextLevelRelations = [];
+                    }
+                    processAPair()
+                }
+                currentLevelRelations = nextLevelRelations;
+                nextLevelRelations = [];
+                //return resolveResults.pop();
+                return resolveResults[resolveId];
+
+                function processAPair() {
+                    const { source, target, reportErrors, resolveId } = currentLevelRelations.pop();
+                    if (overflow) {
+                        resolveResults[resolveId] &= Ternary.False;
+                        return
+                    }
+                    const id = getRelationKey(source, target, relation);
+                    const related = relation.get(id);
+                    if (related !== undefined) {
+                        if (reportErrors && related === RelationComparisonResult.Failed) {
+                            // We are elaborating errors and the cached result is an unreported failure. Record the result as a reported
+                            // failure and continue computing the relation such that errors get reported.
+                            relation.set(id, RelationComparisonResult.FailedAndReported);
+                        }
+                        else {
+                            resolveResults[resolveId] &= (related === RelationComparisonResult.Succeeded) ? Ternary.True : Ternary.False;
+                            return
+                        }
+                    }    
+                    if (!maybeKeys) {
+                        maybeKeys = [];
+                        sourceStack = [];
+                        targetStack = [];
                     }
                     else {
-                        return related === RelationComparisonResult.Succeeded ? Ternary.True : Ternary.False;
-                    }
-                }
-                if (!maybeKeys) {
-                    maybeKeys = [];
-                    sourceStack = [];
-                    targetStack = [];
-                }
-                else {
-                    for (let i = 0; i < maybeCount; i++) {
-                        // If source and target are already being compared, consider them related with assumptions
-                        if (id === maybeKeys[i]) {
-                            return Ternary.Maybe;
+                        for (let i = 0; i < maybeCount; i++) {
+                            // If source and target are already being compared, consider them related with assumptions
+                            if (id === maybeKeys[i]) {
+                                resolveResults[resolveId] = Ternary.Maybe;
+                                return;
+                            }
+                        }
+                        if (depth === 100) {
+                            overflow = true;
+                            resolveResults[resolveId] = Ternary.False;
+                            return;
                         }
                     }
-                    if (depth === 100) {
-                        overflow = true;
-                        return Ternary.False;
-                    }
-                }
-                const maybeStart = maybeCount;
-                maybeKeys[maybeCount] = id;
-                maybeCount++;
-                sourceStack[depth] = source;
-                targetStack[depth] = target;
-                depth++;
-                const saveExpandingFlags = expandingFlags;
-                if (!(expandingFlags & ExpandingFlags.Source) && isDeeplyNestedType(source, sourceStack, depth)) expandingFlags |= ExpandingFlags.Source;
-                if (!(expandingFlags & ExpandingFlags.Target) && isDeeplyNestedType(target, targetStack, depth)) expandingFlags |= ExpandingFlags.Target;
-                const result = expandingFlags !== ExpandingFlags.Both ? structuredTypeRelatedTo(source, target, reportErrors) : Ternary.Maybe;
-                expandingFlags = saveExpandingFlags;
-                depth--;
-                if (result) {
-                    if (result === Ternary.True || depth === 0) {
-                        // If result is definitely true, record all maybe keys as having succeeded
-                        for (let i = maybeStart; i < maybeCount; i++) {
-                            relation.set(maybeKeys[i], RelationComparisonResult.Succeeded);
+                    const maybeStart = maybeCount;
+                    maybeKeys[maybeCount] = id;
+                    maybeCount++;
+                    sourceStack[depth] = source;
+                    targetStack[depth] = target;
+                    depth++;
+                    const saveExpandingFlags = expandingFlags;
+                    if (!(expandingFlags & ExpandingFlags.Source) && isDeeplyNestedType(source, sourceStack, depth)) expandingFlags |= ExpandingFlags.Source;
+                    if (!(expandingFlags & ExpandingFlags.Target) && isDeeplyNestedType(target, targetStack, depth)) expandingFlags |= ExpandingFlags.Target;
+                    const result = expandingFlags !== ExpandingFlags.Both ? structuredTypeRelatedTo(source, target, reportErrors) : Ternary.Maybe;
+                    expandingFlags = saveExpandingFlags;
+                    depth--;
+                    if (result) {
+                        if (result === Ternary.True || depth === 0) {
+                            // If result is definitely true, record all maybe keys as having succeeded
+                            for (let i = maybeStart; i < maybeCount; i++) {
+                                relation.set(maybeKeys[i], RelationComparisonResult.Succeeded);
+                            }
+                            maybeCount = maybeStart;
                         }
+                    }
+                    else {
+                        // A false result goes straight into global cache (when something is false under
+                        // assumptions it will also be false without assumptions)
+                        relation.set(id, reportErrors ? RelationComparisonResult.FailedAndReported : RelationComparisonResult.Failed);
                         maybeCount = maybeStart;
                     }
                 }
-                else {
-                    // A false result goes straight into global cache (when something is false under
-                    // assumptions it will also be false without assumptions)
-                    relation.set(id, reportErrors ? RelationComparisonResult.FailedAndReported : RelationComparisonResult.Failed);
-                    maybeCount = maybeStart;
-                }
-                return result;
             }
 
             function getConstraintForRelation(type: Type) {
