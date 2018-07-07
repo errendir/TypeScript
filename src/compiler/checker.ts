@@ -56,9 +56,11 @@ namespace ts {
 
         // Log stuff
         let level = 0;
+        // @ts-ignore
+        let enabled = false;
         const log = (...args: any[]) => {
             // @ts-ignore
-            console.log(Array.from(new Array(level)).map(() => "  ").join("") + args.join(" "));
+            enabled && console.log(Array.from(new Array(level)).map(() => "  ").join("") + args.join(" "));
         };
 
         const callsToBreakOn = ["propertiesRelatedTo(C<T>,A,true)"];
@@ -6547,8 +6549,9 @@ namespace ts {
             // with its constraint. We do this because if the constraint is a union type it will be distributed
             // over the conditional type and possibly reduced. For example, 'T extends undefined ? never : T'
             // removes 'undefined' from T.
-            if (type.root.isDistributive) {
-                log(`ConditionalType ${typeToString(type)} isDistributive`);
+            if (type.resolvedIsDistributive) {
+                log(`ConditionalType ${typeToString(type)} resolvedIsDistributive`);
+                log(`type.checkType = ${typeToString(type.checkType)}`);
                 const constraint = getConstraintOfType(getSimplifiedType(type.checkType));
                 if (constraint) {
                     const mapper = makeUnaryTypeMapper(type.root.checkType, constraint);
@@ -6559,6 +6562,18 @@ namespace ts {
                     }
                 }
             }
+            // else {
+            //     log(`ConditionalType ${typeToString(type)} NOT isDistributive`);
+            //     const constraint = getConstraintOfType(getSimplifiedType(type.checkType));
+            //     if (constraint) {
+            //         const mapper = makeUnaryTypeMapper(type.root.checkType, constraint);
+            //         const instantiated = getConditionalTypeInstantiation(type, combineTypeMappers(mapper, type.mapper));
+            //         if (!(instantiated.flags & TypeFlags.Never)) {
+            //             log(`getConditionalTypeInstantiation(${typeToString(type)}, combineTypeMappers(makeUnaryTypeMapper(${typeToString(type.root.checkType)}, ${typeToString(constraint)}), type.mapper)) = ${typeToString(instantiated)}`);
+            //             // return instantiated;
+            //         }
+            //     }
+            // }
             return undefined;
         });
 
@@ -8941,6 +8956,7 @@ namespace ts {
             const result = <ConditionalType>createType(TypeFlags.Conditional);
             result.root = root;
             result.checkType = erasedCheckType;
+            result.resolvedIsDistributive = !!(erasedCheckType.flags & TypeFlags.TypeParameter);
             result.extendsType = extendsType;
             result.mapper = mapper;
             result.combinedMapper = combinedMapper;
@@ -9746,6 +9762,10 @@ namespace ts {
                 const instantiatedType = mapper(checkType);
                 if (checkType !== instantiatedType && instantiatedType.flags & (TypeFlags.Union | TypeFlags.Never)) {
                     return mapType(instantiatedType, t => getConditionalType(root, createReplacementMapper(checkType, t, mapper)));
+                }
+                else {
+                    const newType = <ConditionalType>getConditionalType(root, mapper);
+                    newType.resolvedIsDistributive = false;
                 }
             }
             return getConditionalType(root, mapper);

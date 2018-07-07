@@ -4035,6 +4035,7 @@ namespace ts {
         root: ConditionalRoot;
         checkType: Type;
         extendsType: Type;
+        resolvedIsDistributive: boolean;
         resolvedTrueType?: Type;
         resolvedFalseType?: Type;
         /* @internal */
