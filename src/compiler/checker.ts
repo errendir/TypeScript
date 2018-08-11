@@ -1,5 +1,15 @@
 /* @internal */
 namespace ts {
+    function ternaryToString(ret: Ternary) {
+        return ret === Ternary.True
+                ? "True"
+            : ret === Ternary.False
+                ? "False"
+            : ret === Ternary.Maybe
+                ? "Maybe"
+            : "Error";
+    }
+
     const ambientModuleSymbolRegex = /^".+"$/;
 
     let nextSymbolId = 1;
@@ -44,6 +54,52 @@ namespace ts {
         let requestedExternalEmitHelpers: ExternalEmitHelpers;
         let externalHelpersModule: Symbol;
 
+        // @ts-ignore
+        const logEnable = process.env.CALL_TREE && process.env.CALL_TREE.match(/full_steam/gi);
+        const excludes = (process.env.CALL_TREE || "").split("-").slice(1);
+
+        // Log stuff
+        let level = 0;
+        let currentFnNames: string[] = [];
+        const log = (...args: any[]) => {
+            const fnName = currentFnNames[currentFnNames.length-1]
+            // @ts-ignore
+            if (logEnable && !excludes.includes(fnName)) {
+                // @ts-ignore
+                console.log(" → ".repeat(level) + args.join(" "));
+            }
+        };
+
+        const callsToBreakOn = ["propertiesRelatedTo(C<T>,A,true)"];
+
+        const wrapLogCustom = <M extends any[], T>(printArgs: (...args: M) => string, printRet: (ret: T) => string) => {
+            return (fn: (...args: M) => T) => {
+                const functionName = fn.name;
+                return (...args: M) => {
+                    const fnCallString = `${functionName}(${printArgs(...args)})`;
+                    currentFnNames.push(functionName);
+                    log(`${fnCallString}`);
+                    level += 1;
+                    if (callsToBreakOn.indexOf(fnCallString) !== -1) {
+                        debugger;
+                    }
+                    const ret = fn(...args);
+                    level -= 1;
+                    log(`${fnCallString} = ${printRet(ret)}`);
+                    currentFnNames.pop();
+                    return ret;
+                };
+            };
+        };
+
+        const wrapLogUsual = wrapLogCustom(
+            (type: Type, ...args: any[]) => `${typeToString(type)}${args.length > 0 ? "," + args.join(",") : ""}`,
+            (ret: Type | undefined) => `${ret && typeToString(ret)}`
+        );
+        const wrapLog = <M extends any[], A extends Type | undefined>(fn: (type: Type, ...args: M) => A): (type: Type, ...args: M) => A => {
+            return wrapLogUsual(fn as any) as any;
+        };
+
         // tslint:disable variable-name
         const Symbol = objectAllocator.getSymbolConstructor();
         const Type = objectAllocator.getTypeConstructor();
@@ -80,6 +136,29 @@ namespace ts {
 
         /** This will be set during calls to `getResolvedSignature` where services determines an apparent number of arguments greater than what is actually provided. */
         let apparentArgumentCount: number | undefined;
+
+        // @ts-ignore
+        getBaseConstraintOfType = wrapLog(getBaseConstraintOfType)
+        // @ts-ignore
+        getConstraintOfType = wrapLog(getConstraintOfType)
+        // @ts-ignore
+        getConstraintOfDistributiveConditionalType = wrapLog(getConstraintOfDistributiveConditionalType)
+        // @ts-ignore
+        getResolvedBaseConstraint = wrapLog(getResolvedBaseConstraint)
+
+        const wrapIsDeeplyNestedType = wrapLogCustom(
+            (type: Type) => `${typeToString(type)}`,
+            (ret: boolean) => `${ret}`
+        )
+        // @ts-ignore
+        isDeeplyNestedType = wrapIsDeeplyNestedType(isDeeplyNestedType)
+
+        const wrapCheckTypeRelatedTo = wrapLogCustom(
+            (source: Type, target: Type, ..._rest: any[]) => `${typeToString(source)}, ${typeToString(target)}`,
+            (ret: boolean) => ret ? "true" : "false"
+        );
+        // @ts-ignore
+        checkTypeRelatedTo = wrapCheckTypeRelatedTo(checkTypeRelatedTo)
 
         // for public members that accept a Node or one of its subtypes, we must guard against
         // synthetic nodes created during transformations by calling `getParseTreeNode`.
@@ -3035,7 +3114,11 @@ namespace ts {
             if (maxLength && result && result.length >= maxLength) {
                 return result.substr(0, maxLength - "...".length) + "...";
             }
-            return result;
+            function toZeroOne(str: "Z" | "O") { return str === "O" ? 1 : 0 }
+            return result.replace(
+                /(Z|O), (Z|O), (Z|O), (Z|O)/gi,
+                (_a: any, ...match: any[]) => `${toZeroOne(match[0])*1 + toZeroOne(match[1])*2 + toZeroOne(match[2])*4 + toZeroOne(match[3])*8}`
+            );
         }
 
         function toNodeBuilderFlags(flags = TypeFormatFlags.None): NodeBuilderFlags {
@@ -6921,12 +7004,14 @@ namespace ts {
             // over the conditional type and possibly reduced. For example, 'T extends undefined ? never : T'
             // removes 'undefined' from T.
             if (type.root.isDistributive) {
+                log(`ConditionalType ${typeToString(type)} isDistributive`);
                 const simplified = getSimplifiedType(type.checkType);
                 const constraint = simplified === type.checkType ? getConstraintOfType(simplified) : simplified;
                 if (constraint) {
                     const mapper = makeUnaryTypeMapper(type.root.checkType, constraint);
                     const instantiated = getConditionalTypeInstantiation(type, combineTypeMappers(mapper, type.mapper));
                     if (!(instantiated.flags & TypeFlags.Never)) {
+                        log(`getConditionalTypeInstantiation(${typeToString(type)}, combineTypeMappers(makeUnaryTypeMapper(${typeToString(type.root.checkType)}, ${typeToString(constraint)}), type.mapper)) = ${typeToString(instantiated)}`);
                         return instantiated;
                     }
                 }
@@ -6981,9 +7066,11 @@ namespace ts {
 
         function getBaseConstraintOfType(type: Type): Type | undefined {
             if (type.flags & (TypeFlags.InstantiableNonPrimitive | TypeFlags.UnionOrIntersection)) {
+                log(`(getResolvedBaseConstraint/undefined path)`);
                 const constraint = getResolvedBaseConstraint(<InstantiableType | UnionOrIntersectionType>type);
                 return constraint !== noConstraintType && constraint !== circularConstraintType ? constraint : undefined;
             }
+            log(`(keyofConstraintType/undefined path)`);
             return type.flags & TypeFlags.Index ? keyofConstraintType : undefined;
         }
 
@@ -7005,6 +7092,13 @@ namespace ts {
          * circularly references the type variable.
          */
         function getResolvedBaseConstraint(type: InstantiableType | UnionOrIntersectionType): Type {
+            // @ts-ignore
+            getImmediateBaseConstraint = wrapLog(getImmediateBaseConstraint)
+            // @ts-ignore
+            getBaseConstraint = wrapLog(getBaseConstraint)
+            // @ts-ignore
+            computeBaseConstraint = wrapLog(computeBaseConstraint)
+
             let nonTerminating = false;
             return type.resolvedBaseConstraint ||
                 (type.resolvedBaseConstraint = getTypeWithThisArgument(getImmediateBaseConstraint(type), type));
@@ -7045,11 +7139,18 @@ namespace ts {
                         constraint :
                         getBaseConstraint(constraint);
                 }
+                const UNIA = TypeFlags.Union;
+                const INTERSECTIA = TypeFlags.Intersection;
                 if (t.flags & TypeFlags.UnionOrIntersection) {
+                    if (typeToString(t) === "any[] & T") {
+                        log(UNIA + " " + INTERSECTIA);
+                        debugger;
+                    }
                     const types = (<UnionOrIntersectionType>t).types;
                     const baseTypes: Type[] = [];
                     for (const type of types) {
                         const baseType = getBaseConstraint(type);
+                        log(`getBaseConstraint(${typeToString(type)}) = ${baseType && typeToString(baseType)}`);
                         if (baseType) {
                             baseTypes.push(baseType);
                         }
@@ -11002,6 +11103,27 @@ namespace ts {
             errorOutputContainer?: { error?: Diagnostic }
         ): boolean {
 
+            const wrapIsRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, ..._rest: any[]) => `${typeToString(source)},${typeToString(target)}`,
+                ternaryToString
+            );
+            // @ts-ignore
+            isRelatedTo = wrapIsRelatedTo(isRelatedTo)
+
+            const wrapStructuredTypeRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, reportErrors: boolean) => `${typeToString(source)},${typeToString(target)},${reportErrors}`,
+                ternaryToString
+            );
+            // @ts-ignore
+            structuredTypeRelatedTo = wrapStructuredTypeRelatedTo(structuredTypeRelatedTo)
+
+            const wrapPropertiesRelatedTo = wrapLogCustom(
+                (source: Type, target: Type, reportErrors: boolean) => `${typeToString(source)},${typeToString(target)},${reportErrors}`,
+                ternaryToString
+            );
+            // @ts-ignore
+            propertiesRelatedTo = wrapPropertiesRelatedTo(propertiesRelatedTo)
+
             let errorInfo: DiagnosticMessageChain | undefined;
             let maybeKeys: string[];
             let sourceStack: Type[];
@@ -11114,6 +11236,26 @@ namespace ts {
              * * Ternary.False if they are not related.
              */
             function isRelatedTo(source: Type, target: Type, reportErrors = false, headMessage?: DiagnosticMessage): Ternary {
+                const relationType =
+                        relation === assignableRelation
+                            ? "assignable"
+                        : relation === identityRelation
+                            ? "identical"
+                        : relation === comparableRelation
+                            ? "comparable"
+                        : relation === definitelyAssignableRelation
+                            ? "definitely assignable"
+                        : relation === subtypeRelation
+                            ? "subtype"
+                        : relation === enumRelation
+                            ? "enum"
+                        : "unknown relation";
+                log(relationType + ": " + typeToString(source) + " -> " + typeToString(target));
+                // @ts-ignore
+                if (process.env.BREAK_ON && typeToString(source) === process.env.BREAK_ON) {
+                    debugger;
+                }
+
                 if (source.flags & TypeFlags.StringOrNumberLiteral && source.flags & TypeFlags.FreshLiteral) {
                     source = (<LiteralType>source).regularType;
                 }
@@ -11749,13 +11891,19 @@ namespace ts {
                     }
                     else if (relation !== definitelyAssignableRelation) {
                         const distributiveConstraint = getConstraintOfDistributiveConditionalType(<ConditionalType>source);
+                        const defaultConstraint = getDefaultConstraintOfConditionalType(<ConditionalType>source);
+
+                        log("distributive constraint of", typeToString(source), "is", distributiveConstraint && typeToString(distributiveConstraint));
+                        log("default constraint of", typeToString(source), "is", defaultConstraint && typeToString(defaultConstraint));
+
                         if (distributiveConstraint) {
+                            log("distributive constraint of", typeToString(source), "is", typeToString(distributiveConstraint));
                             if (result = isRelatedTo(distributiveConstraint, target, reportErrors)) {
                                 errorInfo = saveErrorInfo;
                                 return result;
                             }
                         }
-                        const defaultConstraint = getDefaultConstraintOfConditionalType(<ConditionalType>source);
+
                         if (defaultConstraint) {
                             if (result = isRelatedTo(defaultConstraint, target, reportErrors)) {
                                 errorInfo = saveErrorInfo;
@@ -11923,6 +12071,7 @@ namespace ts {
                 const properties = getPropertiesOfObjectType(target);
                 for (const targetProp of properties) {
                     if (!(targetProp.flags & SymbolFlags.Prototype)) {
+                        log(`Verifying: `, targetProp.escapedName)
                         const sourceProp = getPropertyOfType(source, targetProp.escapedName);
                         if (sourceProp && sourceProp !== targetProp) {
                             if (isIgnoredJsxProperty(source, sourceProp, getTypeOfSymbol(targetProp))) {
@@ -12443,6 +12592,7 @@ namespace ts {
                             if (count >= 5) return true;
                         }
                     }
+                    log(`nesting depth ${typeToString(type)}: ${count}`);
                 }
             }
             return false;
