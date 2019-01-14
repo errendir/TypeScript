@@ -97,7 +97,7 @@ namespace ts.codefix {
         optional: boolean,
         body: Block | undefined,
     ): MethodDeclaration | undefined {
-        const signatureDeclaration = <MethodDeclaration>checker.signatureToSignatureDeclaration(signature, SyntaxKind.MethodDeclaration, enclosingDeclaration, NodeBuilderFlags.SuppressAnyReturnType);
+        const signatureDeclaration = <MethodDeclaration>checker.signatureToSignatureDeclaration(signature, SyntaxKind.MethodDeclaration, enclosingDeclaration, NodeBuilderFlags.NoTruncation | NodeBuilderFlags.SuppressAnyReturnType);
         if (!signatureDeclaration) {
             return undefined;
         }
@@ -248,5 +248,47 @@ namespace ts.codefix {
             return createToken(SyntaxKind.ProtectedKeyword);
         }
         return undefined;
+    }
+
+    export function setJsonCompilerOptionValue(
+        changeTracker: textChanges.ChangeTracker,
+        configFile: TsConfigSourceFile,
+        optionName: string,
+        optionValue: Expression,
+    ) {
+        const tsconfigObjectLiteral = getTsConfigObjectLiteralExpression(configFile);
+        if (!tsconfigObjectLiteral) return undefined;
+
+        const compilerOptionsProperty = findJsonProperty(tsconfigObjectLiteral, "compilerOptions");
+        if (compilerOptionsProperty === undefined) {
+            changeTracker.insertNodeAtObjectStart(configFile, tsconfigObjectLiteral, createJsonPropertyAssignment(
+                "compilerOptions",
+                createObjectLiteral([
+                    createJsonPropertyAssignment(optionName, optionValue),
+                ])));
+            return;
+        }
+
+        const compilerOptions = compilerOptionsProperty.initializer;
+        if (!isObjectLiteralExpression(compilerOptions)) {
+            return;
+        }
+
+        const optionProperty = findJsonProperty(compilerOptions, optionName);
+
+        if (optionProperty === undefined) {
+            changeTracker.insertNodeAtObjectStart(configFile, compilerOptions, createJsonPropertyAssignment(optionName, optionValue));
+        }
+        else {
+            changeTracker.replaceNode(configFile, optionProperty.initializer, optionValue);
+        }
+    }
+
+    export function createJsonPropertyAssignment(name: string, initializer: Expression) {
+        return createPropertyAssignment(createStringLiteral(name), initializer);
+    }
+
+    export function findJsonProperty(obj: ObjectLiteralExpression, name: string): PropertyAssignment | undefined {
+        return find(obj.properties, (p): p is PropertyAssignment => isPropertyAssignment(p) && !!p.name && isStringLiteral(p.name) && p.name.text === name);
     }
 }
